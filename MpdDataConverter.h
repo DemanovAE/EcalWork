@@ -29,12 +29,12 @@ struct ChannelData {
     Short_t channelNums = 0;
     Short_t numSamples = 0;
     std::vector<Int_t> adcValues = {};
-    
-    TH1F *h_samples = nullptr;
 
     // calculated
     Int_t integral = 0;
-    Short_t peak = 0;
+    Int_t peak = 0;
+    Int_t amplitude = 0;
+    Int_t pedestal = 0;
     Float_t baseline = 0.;
 
     void Clear();
@@ -93,6 +93,7 @@ class MpdDataConverter {
         void OpenOutRootFile(std::string outputData);
         void InitTree();
         void FillTreeData();
+        void WriteTreeAndClose();
         //Для проверки
         void PrintCurrentCounByte();
         void PrintWord(uint32_t word, const std::string& label = "");

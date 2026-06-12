@@ -24,15 +24,13 @@ void ChannelData::Clear() {
     channelNums = 0;
     numSamples = 0;
     adcValues.clear();
-    
-    if (h_samples != nullptr) {
-        delete h_samples;
-        h_samples = nullptr;
-    }
-
+ 
     integral = 0;
     peak = 0;
-    baseline = 0.0;
+    baseline = 0;
+    amplitude = 0;
+    pedestal = 0;
+    
 }
 
 void ChannelData::Print(bool printADC, int maxADC) const {
@@ -48,6 +46,8 @@ void ChannelData::Print(bool printADC, int maxADC) const {
     std::cout << std::setw(25) << "Number of Samples:  " << numSamples << std::endl;
     std::cout << std::setw(25) << "Integral:  " << integral << std::endl;
     std::cout << std::setw(25) << "Peak:  " << peak << std::endl;
+    std::cout << std::setw(25) << "Amplitude:  " << amplitude << std::endl;
+    std::cout << std::setw(25) << "Pedestal:  " << pedestal << std::endl;
     std::cout << std::setw(25) << "Baseline:  " << std::fixed << std::setprecision(2) << baseline << std::endl;
     
     if (printADC && !adcValues.empty()) {
@@ -170,18 +170,53 @@ Short_t getAddressForBasket_38(uint32_t channel)
 
 // ==================== MpdDataConverter ====================
 
-MpdDataConverter::~MpdDataConverter() {
-    if (outFile && !outFile->IsZombie()) {
-        outFile->cd();
-        if (tree) {
-            tree->Write("", TObject::kOverwrite);
-        }
-        outFile->Close();
-        delete outFile;
+void MpdDataConverter::WriteTreeAndClose() {
+    if (!outFile || outFile->IsZombie()) {
+        std::cerr << "Warning: Output file is not open" << std::endl;
+        return;
     }
+    
+    if (!tree) {
+        std::cerr << "Warning: Tree is null" << std::endl;
+        return;
+    }
+    
+    Long64_t nEntries = tree->GetEntries();
+    if (nEntries == 0) {
+        std::cerr << "Warning: Tree is empty, nothing to write" << std::endl;
+        return;
+    }
+    
+    outFile->cd();
+    
+    std::cout << "Writing tree (" << nEntries << " entries) to file..." << std::endl;
+    tree->Write("", TObject::kOverwrite);
+    std::cout << "Tree written successfully: " << nEntries << " entries" << std::endl;
+}
+
+MpdDataConverter::~MpdDataConverter() {
     if (inFile.is_open()) {
         inFile.close();
+        std::cout << "Input file closed" << std::endl;
     }
+    if (outFile) {
+        try {
+            if (!outFile->IsZombie()) {
+                outFile->Close();
+                std::cout << "ROOT file closed successfully" << std::endl;
+            } else {
+                std::cerr << "Warning: ROOT file is zombie, skipping..." << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error closing ROOT file: " << e.what() << std::endl;
+        }
+        
+        // Удаляем объект файла
+        delete outFile;
+        outFile = nullptr;
+        tree = nullptr;  // tree удаляется вместе с outFile
+    }
+
 }
 
 // Открытие бинарного файла
@@ -223,6 +258,9 @@ void MpdDataConverter::InitTree(){
     tree->Branch("channel_Phi", &channelEvent.channel_Phi,"channel_Phi/S");
     tree->Branch("channel_Z", &channelEvent.channel_Z,"channel_Z/S");
     tree->Branch("integral", &channelEvent.integral, "integral/i");
+    tree->Branch("peak", &channelEvent.peak, "peak/i");
+    tree->Branch("amplitude", &channelEvent.amplitude, "amplitude/i");
+    tree->Branch("pedestal", &channelEvent.pedestal, "pedestal/i");
     if(wChSamplesVector)tree->Branch("adcValues", &channelEvent.adcValues);
 }
 

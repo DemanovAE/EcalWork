@@ -23,19 +23,23 @@ R__LOAD_LIBRARY(./build/libMPDDataConverter.so)
 #endif
 
 template<typename T>
-TH1F* CreateWaveformHistogram(
+void SetWaveformHistogram(
     const std::vector<T>& data, 
+    TH1F *hist,
     const std::string& name = "waveform",
     const std::string& title = "",
     const std::string& xTitle = "Sample Number",
     const std::string& yTitle = "ADC")
 {
-    if (data.empty()) return nullptr;
+    if (data.empty()) return;
     
     int nSamples = data.size();
 
-    TH1F* hist = new TH1F(name.c_str(), title.c_str(), nSamples, 0, nSamples);
+    //TH1F* hist = new TH1F(name.c_str(), title.c_str(), nSamples, 0, nSamples);
     
+    hist->SetName(name.c_str());
+    hist->SetTitle(title.c_str());
+
     for (int i = 0; i < nSamples; i++) {
         hist->SetBinContent(i + 1, static_cast<Float_t>(data[i]));
     }
@@ -45,11 +49,8 @@ TH1F* CreateWaveformHistogram(
     
     hist->SetLineColor(kBlue);
     hist->SetLineWidth(2);
-    //hist->SetFillColor(kBlue - 9);  // Светло-синий для заливки
     hist->SetDrawOption("L");
     hist->SetBit(TH1::kNoStats);
-
-    return hist;
 }
 
 void DrawAllWaveformsOnOneCanvas(MpdDataConverter& converter, 
@@ -60,7 +61,7 @@ void DrawAllWaveformsOnOneCanvas(MpdDataConverter& converter,
     if (histograms.empty()) return;
     
     // Создаем canvas для этого события (один pad)
-    TCanvas* canvas = new TCanvas(Form("event_%d_all_waveforms", eventNumber),
+    TCanvas* canvas = new TCanvas(Form("wf_event_%d", eventNumber),
                                    Form("Event %d - All Waveforms Overlay", eventNumber),
                                    1000, 600);
     
@@ -104,29 +105,23 @@ void DrawAllWaveformsOnOneCanvas(MpdDataConverter& converter,
         first->SetTitle(Form("Event %d - All %d Channels", eventNumber, (int)histograms.size()));
     }
     
-    // Рисуем остальные гистограммы поверх (same)
-    for (size_t i = 0; i < histograms.size(); i++) {
-        histograms[i]->SetLineColor(colors[i % colors.size()]);
-        histograms[i]->SetLineWidth(2);
-        histograms[i]->Draw("L same");
-    }
-    
     // Добавляем легенду
     TLegend* legend = new TLegend(0.85, 0.1, 0.98, 0.9);
     legend->SetBorderSize(1);
     legend->SetFillStyle(1001);
-    
-    for (size_t i = 0; i < histograms.size() && i < 20; i++) {  // максимум 20 в легенде
-        TH1F* hist = histograms[i];
+
+    // Рисуем остальные гистограммы поверх (same)
+    for (size_t i = 0; i < histograms.size(); i++) {
+        //std::cout<<histograms[i]->GetEntries()<<"\n";
+        if(histograms[i]->GetEntries()<1)continue;
+        histograms[i]->SetLineColor(colors[i % colors.size()]);
+        histograms[i]->SetLineWidth(2);
+        histograms[i]->Draw("L same");
         std::string legendEntry = Form("Ch %s", histograms[i]->GetName());
-        legend->AddEntry(hist, legendEntry.c_str(), "l");
+        legend->AddEntry(histograms[i], legendEntry.c_str(), "l");
     }
-    
-    if (histograms.size() > 20) {
-        legend->AddEntry((TObject*)0, Form("+ %d more", (int)histograms.size() - 20), "");
-    }
-    
-    legend->Draw();
+        
+    //legend->Draw("same");
     
     // Сохраняем canvas
     eventDir->cd();
@@ -166,7 +161,11 @@ Int_t SetChannelIntegral(TH1F* hist, int binStart, int binEnd, int nBinLeft, int
     return 0;
 }
 
-
+void ResetTH1Fvector(std::vector<TH1F*>& hists) {
+    for (auto& hist : hists) {
+        if (hist) hist->Reset();
+    }
+}
 
 
 
@@ -176,7 +175,7 @@ Int_t SetChannelIntegral(TH1F* hist, int binStart, int binEnd, int nBinLeft, int
 
 
 void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
-              std::string outputData = "test2.root", 
+              std::string outputData = "test_all.root", 
               int targetEvent = -1) 
 {
 
@@ -200,14 +199,23 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
     converter.SetTypeWaveForms(TypeWaveForms::invert);
     converter.InitTree();
 
-    TH1F *h1_wf;
+    Int_t nBinsSamples = 60;
+    Float_t SamplesMin = 0-0.5;
+    Float_t SamplesMax = 60-0.5;
     
+    TH1F *h1_wf = new TH1F("hist", "", nBinsSamples, SamplesMin, SamplesMax);
+
+    Int_t MaxNChannels = 64*12;
+    std::vector<TH1F*> eventHistograms;
+    eventHistograms.reserve(MaxNChannels);
+    for(int i=0; i<MaxNChannels;i++){
+        eventHistograms.push_back(new TH1F(Form("histo_%i",i), "", nBinsSamples, SamplesMin, SamplesMax));
+    }
+
     TDirectory* WfDir = converter.outFile->mkdir("channel_wf");
     WfDir->cd();
-
-    //converter.FullConvertData2TreeRoot();
     
-    while (converter.ReadEvent() && converter.EventNumber<100) {
+    while (converter.ReadEvent() && converter.EventNumber<100){
         
         if (targetEvent > 0 && converter.EventNumber != (uint32_t)targetEvent) {
             continue;  // Ищем дальше
@@ -219,8 +227,9 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
         //     EventDir = gDirectory->mkdir(eventDirName.c_str());
         // }
 
-        TDirectory* savedDir = gDirectory;
-        std::vector<TH1F*> eventHistograms;
+        //TDirectory* savedDir = gDirectory;
+
+        ResetTH1Fvector(eventHistograms);
 
         while (converter.ReadADC()) {
             while(converter.ReadChannel()){
@@ -234,16 +243,18 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
                 std::string h_name = Form("h_ev_%i_ch_%i_phi_%i_z_%i",evNum,chNum,chPhi,chZ);
                 std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i",evNum,chNum,chPhi,chZ);
 
-                h1_wf=CreateWaveformHistogram(converter.channelEvent.adcValues,h_name,h_title);
+                h1_wf=eventHistograms.at(converter.channelEvent.channelNums-1);
+                SetWaveformHistogram(converter.channelEvent.adcValues,h1_wf,h_name,h_title);
                 converter.channelEvent.integral=SetChannelIntegral(h1_wf,iBinStart,iBinStop,iBinLeft,iBinRight);
 
                 if (h1_wf != nullptr) {
+                    WfDir->cd();
                     //h1_wf->Write();
-                    eventHistograms.push_back(h1_wf);
+                    //eventHistograms.push_back(h1_wf);
                 }
                 
                 converter.outFile->cd();
-                if(targetEvent>0)converter.channelEvent.Print();
+                //if(targetEvent>0)converter.channelEvent.Print();
                 converter.FillTreeData();
             }
         }
@@ -256,19 +267,21 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
         // for (auto hist : eventHistograms) {
         //     delete hist;
         // }
-        savedDir->cd();
+        // eventHistograms.clear();
+
+        //savedDir->cd();
         
         if (targetEvent > 0) {
             break;
         }
     }
 
-    ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
-    std::cout << "Output saved to: " << outputData << std::endl;
+    //ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
+    std::cout << "\n\nOutput saved to: " << outputData <<"\n\n"<< std::endl;
+
+    converter.WriteTreeAndClose();
 
     timer1.Stop();
     timer1.Print();
-
-    //gSystem->Exit(0);
 
 }
