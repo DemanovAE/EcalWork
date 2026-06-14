@@ -1,6 +1,5 @@
 #include "MpdDataConverter.h"
 #include <cstddef>
-#include <fstream>
 #include <ostream>
 #include <iostream>
 #include <ctime>
@@ -19,9 +18,7 @@
 #include "TCanvas.h"
 #include "TLegend.h"
 #include "TLine.h"
-#include "TColor.h"
 
-#include "TSystem.h"
 
 #if ROOT_VERSION_CODE >= ROOT_VERSION(6,0,0)
 R__LOAD_LIBRARY(./build/libMPDDataConverter.so)
@@ -265,8 +262,8 @@ void ResetTH1Fvector(std::vector<TH1F*>& hists, std::vector<int> iNumClear) {
 
 
 void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
-              std::string outputData = "test_all2.root", 
-              int targetEvent = 549) 
+              std::string outputData = "../test_all2.root", 
+              int targetEvent = -1) 
 {
 
     TStopwatch timer1;
