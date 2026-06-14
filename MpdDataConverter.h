@@ -37,6 +37,9 @@ struct ChannelData {
     Int_t pedestal = 0;
     Float_t baseline = 0.;
 
+    Int_t GetMaximumAdcValue(Int_t startIndex = 0, Int_t endIndex = 60);
+    Int_t GetMinimumAdcValue(Int_t startIndex = 0, Int_t endIndex = 60);
+
     void Clear();
     void Print(bool printADC = false, int maxADC = 20) const;
 };

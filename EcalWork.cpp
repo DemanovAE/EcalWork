@@ -219,33 +219,31 @@ Int_t GetPedestalAmpl(std::vector<Int_t> _adc_value, Int_t _Skip, Int_t _count){
     return TMath::Abs(*maxIt-*minIt);
 }
 
-void SetChannelPeakIntegralAmp(ChannelData& _chData, TH1F* hist, int binStart, int binEnd, int nBinLeft, int nBinRight) {
+void SetChannelIntegralAmp(ChannelData& _chData, TH1F* hist, int binStart, int binEnd, int nBinLeft, int nBinRight) {
     if (!hist) return;
     if(hist->GetEntries()==0) return;
     // Пик
     Float_t maxValue = 0;
     Int_t peakBin=0;
 
-    for (int i = binStart + 1; i <= binEnd; i++) {
+    for (int i = binStart; i <= binEnd; i++) {
         Float_t currentValue = TMath::Abs(hist->GetBinContent(i));
         if (currentValue > maxValue) {
             maxValue = currentValue;
             peakBin = i;
         }
     }
-
-    double peakX = hist->GetBinCenter(peakBin);
-    double peakY = hist->GetBinContent(peakBin);
     
     Int_t int_left = (peakBin-nBinLeft)<=0 ? 20 : peakBin-nBinLeft;
     Int_t int_right = (peakBin+nBinRight)>=60 ? 46 : peakBin+nBinRight;
 
-    //std::cout<<"Integral: "<<int_left<<"\t"<<peakBin<<"\t"<<peakY<<"\t"<<int_right<<"\t"<<hist->Integral(int_left, int_right)<<std::endl;
+    double peakX = hist->GetBinCenter(peakBin);
+    double peakY = hist->GetBinContent(peakBin);
 
     // Интеграл
     _chData.integral = hist->Integral(int_left, int_right);
-    _chData.peak = peakY;
     _chData.amplitude = peakY;
+    //_chData.Print();
 }
 
 void ResetTH1Fvector(std::vector<TH1F*>& hists, std::vector<int> iNumClear) {
@@ -301,7 +299,7 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
     for(int i=0; i<MaxNChannels;i++){
         eventHistograms.push_back(new TH1F(Form("histo_%i",i), "", nBinsSamples, SamplesMin, SamplesMax));
     }
-    TH2D *h2_int_ch = new TH2D(Form("ch_integral"), ";channel Num;Integral", MaxNChannels,0,MaxNChannels,700,0,700000);
+    TH2D *h2_int_ch = new TH2D(Form("ch_integral"), ";channel Num;Integral", MaxNChannels,0.5,MaxNChannels+0.5,700,0,700000);
 
 
     std::vector<ChannelData> ChannelDataInEvent;
@@ -330,6 +328,9 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
             continue;
         }
 
+        ChannelDataInEvent.clear();
+        std::vector<int> _PhiCount(12);
+
         while (converter.ReadADC()) {
             while(converter.ReadChannel()){
                                 
@@ -346,22 +347,32 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
                 std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i",evNum,chNum,chPhi,chZ);
 
                 SetWaveformHistogram(converter.channelEvent.adcValues,h1_wf,h_name,h_title);                
-                SetChannelPeakIntegralAmp(converter.channelEvent, h1_wf,iBinStart,iBinStop,iBinLeft,iBinRight);
+                SetChannelIntegralAmp(converter.channelEvent, h1_wf,iBinStart,iBinStop,iBinLeft,iBinRight);
                 
-                if(GetPedestalAmpl(converter.channelEvent.adcValues, iBinPedestalSkip,iBinPedestalCount)>100)continue;
-                ChannelDataInEvent.push_back(converter.channelEvent);
+                if(converter.channelEvent.amplitude<100)continue;
+                _PhiCount.at(chPhi-1)++;
+
+                ChannelDataInEvent.push_back(converter.channelEvent);                
                 
-                h2_int_ch->Fill(chNum-1,converter.channelEvent.integral);
-                
-                converter.outFile->cd();
-                converter.FillTreeData();
+                //converter.outFile->cd();
+                //converter.FillTreeData();
             } //end ReadChannel
         } //end ReadADC
 
         WfDir->cd();
-        if(ChannelDataInEvent.size()>20)DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
+        
+        if(ChannelDataInEvent.size() < 5) continue;
+        if(ChannelDataInEvent.size() > 128) continue;
 
-        ChannelDataInEvent.clear();
+        int max_PhiCount = *std::max_element(_PhiCount.begin(), _PhiCount.end());
+        if( max_PhiCount < 5) continue;
+
+        for(int i=0; i<ChannelDataInEvent.size();i++){
+            converter.channelEvent = ChannelDataInEvent[i];
+            converter.FillTreeData();
+            h2_int_ch->Fill(converter.channelEvent.channelNums,converter.channelEvent.integral);
+        }
+        DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
 
         if (targetEvent > 0) {
             break;

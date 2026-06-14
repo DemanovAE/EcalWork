@@ -64,6 +64,22 @@ void ChannelData::Print(bool printADC, int maxADC) const {
     std::cout << "==================================" << std::endl;
 }
 
+Int_t ChannelData::GetMaximumAdcValue(Int_t startIndex, Int_t endIndex) {
+    if (adcValues.empty()) return 0;
+    if (startIndex >= adcValues.size()) return 0;
+    if (endIndex > adcValues.size()) endIndex = adcValues.size();
+    if (startIndex >= endIndex) return 0;
+    return *std::max_element(adcValues.begin() + startIndex, adcValues.begin() + endIndex);
+}
+
+Int_t ChannelData::GetMinimumAdcValue(Int_t startIndex, Int_t endIndex) {
+    if (adcValues.empty()) return 0;
+    if (startIndex >= adcValues.size()) return 0;
+    if (endIndex > adcValues.size()) endIndex = adcValues.size();
+    if (startIndex >= endIndex) return 0;
+    return *std::min_element(adcValues.begin() + startIndex, adcValues.begin() + endIndex);
+}
+
 // ==================== Channel Map ====================
 
 //маппа и функции для возврата координаты x и phi
@@ -516,20 +532,4 @@ ULong64_t MpdDataConverter::SetTimeStampNs(uint32_t _sec, uint32_t _ns){
 Short_t MpdDataConverter::SetChannelNum(uint32_t _AdcId, uint32_t _chNum){    
     if(_AdcId==0)return -1;
     return (_AdcId-1)*64 + _chNum;
-}
-
-Int_t MpdDataConverter::GetMaximumAdcValue(Int_t startIndex, Int_t endIndex) {
-    if (channelEvent.adcValues.empty()) return 0;
-    if (startIndex >= channelEvent.adcValues.size()) return 0;
-    if (endIndex > channelEvent.adcValues.size()) endIndex = channelEvent.adcValues.size();
-    if (startIndex >= endIndex) return 0;
-    return *std::max_element(channelEvent.adcValues.begin() + startIndex, channelEvent.adcValues.begin() + endIndex);
-}
-
-Int_t MpdDataConverter::GetMinimumAdcValue(Int_t startIndex, Int_t endIndex) {
-    if (channelEvent.adcValues.empty()) return 0;
-    if (startIndex >= channelEvent.adcValues.size()) return 0;
-    if (endIndex > channelEvent.adcValues.size()) endIndex = channelEvent.adcValues.size();
-    if (startIndex >= endIndex) return 0;
-    return *std::min_element(channelEvent.adcValues.begin() + startIndex, channelEvent.adcValues.begin() + endIndex);
 }
