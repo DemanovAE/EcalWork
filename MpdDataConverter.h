@@ -8,7 +8,7 @@
 #include <cstdint>
 #include "RtypesCore.h"
 #include "TH1.h"
-
+#include <algorithm>
 
 class TFile;
 class TTree;
@@ -112,7 +112,8 @@ class MpdDataConverter {
         Int_t AdcSampleValueFirst(uint32_t _adcValue);
         Int_t AdcSampleValueSecond(uint32_t _adcValue);
         Int_t ChangeWfValue(Int_t _value);
-
+        Int_t GetMaximumAdcValue(Int_t startIndex, Int_t endIndex);
+        Int_t GetMinimumAdcValue(Int_t startIndex, Int_t endIndex);
         ~MpdDataConverter();
 
 };

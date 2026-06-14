@@ -254,13 +254,13 @@ void MpdDataConverter::InitTree(){
     tree->Branch("timestamp_sec", &channelEvent.timestamp_sec, "timestamp_sec/i");
     tree->Branch("timestamp_ns", &channelEvent.timestamp_ns, "timestamp_ns/i");
     tree->Branch("timestamp", &channelEvent.timestamp_f, "timestamp/l");
-    tree->Branch("channelNums", &channelEvent.channelNums,"channelNums/S");
-    tree->Branch("channel_Phi", &channelEvent.channel_Phi,"channel_Phi/S");
-    tree->Branch("channel_Z", &channelEvent.channel_Z,"channel_Z/S");
-    tree->Branch("integral", &channelEvent.integral, "integral/i");
-    tree->Branch("peak", &channelEvent.peak, "peak/i");
-    tree->Branch("amplitude", &channelEvent.amplitude, "amplitude/i");
-    tree->Branch("pedestal", &channelEvent.pedestal, "pedestal/i");
+    tree->Branch("channelNums", &channelEvent.channelNums,"channelNums/s");
+    tree->Branch("channel_Phi", &channelEvent.channel_Phi,"channel_Phi/s");
+    tree->Branch("channel_Z", &channelEvent.channel_Z,"channel_Z/s");
+    tree->Branch("integral", &channelEvent.integral, "integral/I");
+    tree->Branch("peak", &channelEvent.peak, "peak/I");
+    tree->Branch("amplitude", &channelEvent.amplitude, "amplitude/I");
+    tree->Branch("pedestal", &channelEvent.pedestal, "pedestal/I");
     if(wChSamplesVector)tree->Branch("adcValues", &channelEvent.adcValues);
 }
 
@@ -454,6 +454,7 @@ bool MpdDataConverter::ReadChannel(){
     uint32_t _word=0;
     g_CountReadChannelByte=0;
     channelEvent.Clear();
+    channelEvent.adcValues.reserve(60);
 
     // [i+10] Ch_{num}-1 and Len byte channel
     ChannelNumAndLen=readWord(TypeReadByte::adc);
@@ -497,6 +498,7 @@ Int_t MpdDataConverter::AdcSampleValueSecond(uint32_t _adcValue){
     uint16_t raw = _adcValue & 0xFFFF;
     return static_cast<Int_t>(static_cast<int16_t>(raw));
 }
+
 Int_t MpdDataConverter::ChangeWfValue(Int_t _value){
     switch (g_TypeWF) {
         case TypeWaveForms::raw : return _value;
@@ -514,4 +516,20 @@ ULong64_t MpdDataConverter::SetTimeStampNs(uint32_t _sec, uint32_t _ns){
 Short_t MpdDataConverter::SetChannelNum(uint32_t _AdcId, uint32_t _chNum){    
     if(_AdcId==0)return -1;
     return (_AdcId-1)*64 + _chNum;
+}
+
+Int_t MpdDataConverter::GetMaximumAdcValue(Int_t startIndex, Int_t endIndex) {
+    if (channelEvent.adcValues.empty()) return 0;
+    if (startIndex >= channelEvent.adcValues.size()) return 0;
+    if (endIndex > channelEvent.adcValues.size()) endIndex = channelEvent.adcValues.size();
+    if (startIndex >= endIndex) return 0;
+    return *std::max_element(channelEvent.adcValues.begin() + startIndex, channelEvent.adcValues.begin() + endIndex);
+}
+
+Int_t MpdDataConverter::GetMinimumAdcValue(Int_t startIndex, Int_t endIndex) {
+    if (channelEvent.adcValues.empty()) return 0;
+    if (startIndex >= channelEvent.adcValues.size()) return 0;
+    if (endIndex > channelEvent.adcValues.size()) endIndex = channelEvent.adcValues.size();
+    if (startIndex >= endIndex) return 0;
+    return *std::min_element(channelEvent.adcValues.begin() + startIndex, channelEvent.adcValues.begin() + endIndex);
 }

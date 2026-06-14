@@ -1,4 +1,5 @@
 #include "MpdDataConverter.h"
+#include <cstddef>
 #include <fstream>
 #include <ostream>
 #include <iostream>
@@ -7,14 +8,18 @@
 #include <cstdlib>
 #include <vector>
 
+#include "Rtypes.h"
 #include "RtypesCore.h"
 #include "TFile.h"
 #include "TGraph.h"
 #include "TH1.h"
 #include "TH2.h"
+#include "TMathBase.h"
 #include "TStopwatch.h"
 #include "TCanvas.h"
 #include "TLegend.h"
+#include "TLine.h"
+#include "TColor.h"
 
 #include "TSystem.h"
 
@@ -53,87 +58,173 @@ void SetWaveformHistogram(
     hist->SetBit(TH1::kNoStats);
 }
 
-void DrawAllWaveformsOnOneCanvas(MpdDataConverter& converter, 
-                                  int eventNumber,
+void DrawAllWaveformsOnOneCanvas( std::vector<ChannelData> _ChData,
                                   std::vector<TH1F*>& histograms,
+                                  TH2D * h2_histo,
+                                  std::vector<TLine*>& _userGrid,
                                   TDirectory* eventDir) {
     
-    if (histograms.empty()) return;
-    
-    // Создаем canvas для этого события (один pad)
-    TCanvas* canvas = new TCanvas(Form("wf_event_%d", eventNumber),
-                                   Form("Event %d - All Waveforms Overlay", eventNumber),
-                                   1000, 600);
-    
-    // Настройка canvas
-    canvas->SetGridx(0);
-    canvas->SetGridy(0);
-    
-    // Цвета для разных каналов
-    std::vector<int> colors = {kRed, kBlue, kGreen, kMagenta, kCyan, kOrange, 
-                               kTeal, kPink, kViolet, kSpring, kAzure, kYellow,
-                               kGray, kBlack, kOrange+1, kGreen+2, kRed+2};
-    
-    
+    if (_ChData.empty()) return;
 
-    // Рисуем первую гистограмму (она создает оси)
-    std::vector<Float_t> axis_y;
-    switch (converter.g_TypeWF) {
-        case TypeWaveForms::raw: 
-            axis_y = {-35000, +40000};
-            break;
-        case TypeWaveForms::baseline: 
-            axis_y = {-70000, 5000};
-            break;
-        case TypeWaveForms::invert: 
-            axis_y = {-5000, 70000};
-            break;
-    }
+    int eventNumber = _ChData[0].eventNum;
 
-    TH2F* first;
+    std::vector<Float_t> axis_y_min;
+    std::vector<Float_t> axis_y_max;
 
-    if (!histograms.empty()) {
-        first = new TH2F(Form("h_axis_%i",eventNumber),"",2,0,60,2,axis_y[0],axis_y[1]);
-        first->SetLineColor(colors[0 % colors.size()]);
-        first->SetBit(TH1::kNoStats);
-        first->SetLineWidth(2);
-        first->Draw();
+    for (size_t i = 0; i < _ChData.size(); i++) {
+        int chNum=_ChData[i].channelNums;
+        int chPhi=_ChData[i].channel_Phi;
+        int chZ  =_ChData[i].channel_Z;
+        int chInt =_ChData[i].integral;
+        std::string h_name = Form("h_ev_%i_ch_%i_phi_%i_z_%i",eventNumber,chNum,chPhi,chZ);
+        std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i",eventNumber,chNum,chPhi,chZ);
         
-        // Настройка осей
-        first->GetXaxis()->SetTitle("Sample Number");
-        first->GetYaxis()->SetTitle("ADC Value");
-        first->SetTitle(Form("Event %d - All %d Channels", eventNumber, (int)histograms.size()));
-    }
+        SetWaveformHistogram(_ChData[i].adcValues,histograms[chNum-1],h_name,h_title);
+        
+        h2_histo->SetBinContent(h2_histo->FindBin(chZ,chPhi),chInt);
     
-    // Добавляем легенду
-    TLegend* legend = new TLegend(0.85, 0.1, 0.98, 0.9);
-    legend->SetBorderSize(1);
+        axis_y_max.push_back(histograms[chNum-1]->GetMaximum());
+        axis_y_min.push_back(histograms[chNum-1]->GetMinimum());
+
+    }
+
+    Float_t AxisYmax= *std::max_element(axis_y_max.begin(), axis_y_max.end());
+    Float_t AxisYmin= *std::min_element(axis_y_min.begin(), axis_y_min.end());
+
+    TCanvas* canvas = new TCanvas(Form("wf_event_%d", eventNumber),Form("Event %d - All Waveforms Overlay", eventNumber), 3*720,2*720);
+
+    TPad* topPad = new TPad("topPad", "Top Pad", 0, 0.35, 1, 1);
+    TPad* bottomPad = new TPad("bottomPad", "Bottom Pad", 0, 0, 1, 0.35);
+
+    topPad->SetFillColor(0);
+    topPad->SetFrameFillColor(0);
+    
+    bottomPad->SetFillColor(0);
+    bottomPad->SetFrameFillColor(0);
+    bottomPad->SetTopMargin(0);
+    bottomPad->SetBottomMargin(0.2);
+
+    canvas->cd();
+    topPad->Draw();
+    bottomPad->Draw();
+
+    std::vector<int> colors = {kRed, kBlue, kGreen, kMagenta, kCyan, kYellow, 
+                               kTeal, kPink, kViolet, kSpring, kAzure, kOrange};
+    std::vector<int> colorTone = {-2,-1,0,1,2,3};
+    std::vector<int> LineColor;
+
+    LineColor.reserve(colors.size()*colorTone.size());
+    for(int i=0; i<colorTone.size();i++){
+        for(int j=0; j<colors.size();j++){
+            LineColor.push_back(colors[j]+colorTone[i]);
+        }
+    }
+
+    TH2F* AxisHisto = new TH2F(Form("h_axis_%i",eventNumber),"",
+        2,0,60,2,AxisYmin-0.1*TMath::Abs(AxisYmin-AxisYmax),AxisYmax+0.1*TMath::Abs(AxisYmin-AxisYmax));
+    AxisHisto->SetLineColor(colors[0 % colors.size()]);
+    AxisHisto->SetBit(TH1::kNoStats);
+    AxisHisto->SetLineWidth(2);
+    topPad->cd();
+    AxisHisto->Draw();
+    
+    AxisHisto->GetXaxis()->SetTitle("Sample Number");
+    AxisHisto->GetYaxis()->SetTitle("ADC Value");
+    AxisHisto->SetTitle(Form("Event %d - All %d Channels", eventNumber, (int)_ChData.size()));
+    
+    TLegend* legend = new TLegend(0.91, 0.1, 1.0, 0.9);
+    legend->SetBorderSize(0);
+    legend->SetNColumns(2);
     legend->SetFillStyle(1001);
 
-    // Рисуем остальные гистограммы поверх (same)
-    for (size_t i = 0; i < histograms.size(); i++) {
-        //std::cout<<histograms[i]->GetEntries()<<"\n";
-        if(histograms[i]->GetEntries()<1)continue;
-        histograms[i]->SetLineColor(colors[i % colors.size()]);
-        histograms[i]->SetLineWidth(2);
-        histograms[i]->Draw("L same");
-        std::string legendEntry = Form("Ch %s", histograms[i]->GetName());
-        legend->AddEntry(histograms[i], legendEntry.c_str(), "l");
+    for (size_t i = 0; i < _ChData.size(); i++) {
+        int iCh = _ChData[i].channelNums-1;
+        if(histograms[iCh]->GetEntries()<1)continue;
+        //histograms[iCh]->SetLineColor(colors[i % colors.size()]);
+        histograms[iCh]->SetLineColor(LineColor[(iCh+1)%64]);
+        histograms[iCh]->SetLineWidth(2);
+        histograms[iCh]->Draw("L same");
+        std::string legendEntry = Form("%i", _ChData[i].channelNums);
+        legend->AddEntry(histograms[iCh], legendEntry.c_str(), "l");
     }
         
-    //legend->Draw("same");
+    legend->Draw("same");
     
-    // Сохраняем canvas
+    bottomPad->cd();
+    //h2_histo->GetXaxis()->SetTitleOffset(AxisHisto->GetXaxis()->GetTitleOffset());
+    h2_histo->GetXaxis()->SetTitleSize(2*AxisHisto->GetXaxis()->GetTitleSize());
+    h2_histo->GetXaxis()->SetLabelSize(2*AxisHisto->GetXaxis()->GetLabelSize());
+    h2_histo->GetYaxis()->SetTitleSize(2*AxisHisto->GetYaxis()->GetTitleSize());
+    h2_histo->GetYaxis()->SetLabelSize(2*AxisHisto->GetYaxis()->GetLabelSize());
+    h2_histo->GetYaxis()->SetTitleOffset(0.4); 
+    h2_histo->GetYaxis()->SetTickSize(0.005);
+    //h2_histo->GetXaxis()->SetTitleSize(0.5);
+    h2_histo->Draw("COLZ");
+  
+    for(int i=0; i<_userGrid.size();i++){
+        _userGrid[i]->SetLineColor(kBlack);
+        _userGrid[i]->SetLineStyle(2);
+        _userGrid[i]->SetLineWidth(1);
+        _userGrid[i]->Draw("same");
+    }
+
+    bottomPad->Modified();
+    bottomPad->Update();
+
     eventDir->cd();
-    canvas->Write();
-    
-    // Очищаем память
+    //canvas->Write();
+    canvas->SaveAs(Form("/home/aleksandr/ecal_work/pict/%s.png",canvas->GetName()));
+
+    for (size_t i = 0; i < _ChData.size(); i++) {
+        int chNum=_ChData[i].channelNums;
+        histograms[chNum-1]->Reset();
+    }
+
+    h2_histo->Reset();
+
     delete canvas;
     delete legend;
+    delete AxisHisto;
+
+    canvas = nullptr;
+    legend = nullptr;
+    AxisHisto = nullptr;
 }
 
-Int_t SetChannelIntegral(TH1F* hist, int binStart, int binEnd, int nBinLeft, int nBinRight) {
-    if (!hist) return 0;
+Int_t SetPedestal(std::vector<Int_t> _adc_value, Int_t _Skip, Int_t _count){
+    Int_t SumAdc = 0;
+    Int_t nCount = 0;
+    Int_t result = 0;
+    if(_adc_value.size()==0)return 0;
+    
+    for(int i=_Skip; i<(_Skip+_count); i++){
+        SumAdc+=_adc_value[i];
+        nCount++;
+    }
+    result = (Int_t)(SumAdc/nCount);
+    return result;
+}
+
+void PedestalSubtraction(std::vector<Int_t>& _ch_Data, Int_t _pedestal){
+    for(int i=0; i<_ch_Data.size();i++){
+        _ch_Data[i] = _ch_Data[i]-_pedestal;
+    }
+}
+
+Int_t GetPedestalAmpl(std::vector<Int_t> _adc_value, Int_t _Skip, Int_t _count){
+    Int_t SumAdc = 0;
+    Int_t nCount = 0;
+    Int_t result = 0;
+    if(_adc_value.size()==0)return 0;
+    
+    auto [minIt, maxIt] = std::minmax_element(_adc_value.begin(), _adc_value.begin() + _Skip + _count);
+
+    return TMath::Abs(*maxIt-*minIt);
+}
+
+void SetChannelPeakIntegralAmp(ChannelData& _chData, TH1F* hist, int binStart, int binEnd, int nBinLeft, int nBinRight) {
+    if (!hist) return;
+    if(hist->GetEntries()==0) return;
     // Пик
     Float_t maxValue = 0;
     Int_t peakBin=0;
@@ -149,21 +240,20 @@ Int_t SetChannelIntegral(TH1F* hist, int binStart, int binEnd, int nBinLeft, int
     double peakX = hist->GetBinCenter(peakBin);
     double peakY = hist->GetBinContent(peakBin);
     
-    Int_t int_left = (peakBin-nBinLeft)<=0 ? 10 : peakBin-nBinLeft;
-    Int_t int_right = (peakBin+nBinRight)>=60 ? 50 : peakBin+nBinRight;
-
+    Int_t int_left = (peakBin-nBinLeft)<=0 ? 20 : peakBin-nBinLeft;
+    Int_t int_right = (peakBin+nBinRight)>=60 ? 46 : peakBin+nBinRight;
 
     //std::cout<<"Integral: "<<int_left<<"\t"<<peakBin<<"\t"<<peakY<<"\t"<<int_right<<"\t"<<hist->Integral(int_left, int_right)<<std::endl;
 
     // Интеграл
-    return hist->Integral(int_left, int_right);
-    
-    return 0;
+    _chData.integral = hist->Integral(int_left, int_right);
+    _chData.peak = peakY;
+    _chData.amplitude = peakY;
 }
 
-void ResetTH1Fvector(std::vector<TH1F*>& hists) {
-    for (auto& hist : hists) {
-        if (hist) hist->Reset();
+void ResetTH1Fvector(std::vector<TH1F*>& hists, std::vector<int> iNumClear) {
+    for (int i=0; i<iNumClear.size();i++) {
+        hists[iNumClear[i]]->Reset();
     }
 }
 
@@ -175,13 +265,16 @@ void ResetTH1Fvector(std::vector<TH1F*>& hists) {
 
 
 void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
-              std::string outputData = "test_all.root", 
-              int targetEvent = -1) 
+              std::string outputData = "test_all2.root", 
+              int targetEvent = 549) 
 {
 
     TStopwatch timer1;
     timer1.Start();
 
+    // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
+    Int_t iBinPedestalSkip = 2;
+    Int_t iBinPedestalCount = 10;
     //Для поиска пика
     Int_t iBinStart = 20;
     Int_t iBinStop  = 50;
@@ -211,31 +304,43 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
     for(int i=0; i<MaxNChannels;i++){
         eventHistograms.push_back(new TH1F(Form("histo_%i",i), "", nBinsSamples, SamplesMin, SamplesMax));
     }
+    TH2D *h2_int_ch = new TH2D(Form("ch_integral"), ";channel Num;Integral", MaxNChannels,0,MaxNChannels,700,0,700000);
+
+
+    std::vector<ChannelData> ChannelDataInEvent;
+    ChannelDataInEvent.reserve(MaxNChannels);
+
+    TH2D *h2_integral_z_phi=new TH2D("h2",";Z;Phi",64,0.5,64.5,12,0.5,12.5);
+    h2_integral_z_phi->GetXaxis()->SetNdivisions(13, 5, kTRUE);
+    h2_integral_z_phi->GetYaxis()->SetNdivisions(12, 0, kTRUE);
+    h2_integral_z_phi->SetBit(TH1::kNoStats);
+
+    std::vector<TLine*> UserGridXY;
+    for (int j = 1; j <= 12; j++) {
+        UserGridXY.push_back(new TLine(0.5, j + 0.5, 64.5, j + 0.5));
+        
+    }
+    for (int i = 1; i <= 64; i++) {
+        UserGridXY.push_back(new TLine(i + 0.5, 0.5, i + 0.5, 12.5));
+    }
 
     TDirectory* WfDir = converter.outFile->mkdir("channel_wf");
     WfDir->cd();
     
-    while (converter.ReadEvent() && converter.EventNumber<100){
+    while (converter.ReadEvent() && converter.EventNumber<1000){
         
         if (targetEvent > 0 && converter.EventNumber != (uint32_t)targetEvent) {
-            continue;  // Ищем дальше
+            continue;
         }
-
-        // std::string eventDirName = Form("ev_%d", converter.EventNumber);
-        // TDirectory* EventDir = gDirectory->GetDirectory(eventDirName.c_str());
-        // if (!EventDir) {
-        //     EventDir = gDirectory->mkdir(eventDirName.c_str());
-        // }
-
-        //TDirectory* savedDir = gDirectory;
-
-        ResetTH1Fvector(eventHistograms);
 
         while (converter.ReadADC()) {
             while(converter.ReadChannel()){
                                 
-                //EventDir->cd();
-
+                //Считаем подложку и вычитем ее
+                converter.channelEvent.pedestal=SetPedestal(converter.channelEvent.adcValues,iBinPedestalSkip,iBinPedestalCount);
+                PedestalSubtraction(converter.channelEvent.adcValues,converter.channelEvent.pedestal);
+                
+                //Далее гистограмм для WF и подсчета интеграла
                 int evNum=converter.channelEvent.eventNum;
                 int chNum=converter.channelEvent.channelNums;
                 int chPhi=converter.channelEvent.channel_Phi;
@@ -243,38 +348,31 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
                 std::string h_name = Form("h_ev_%i_ch_%i_phi_%i_z_%i",evNum,chNum,chPhi,chZ);
                 std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i",evNum,chNum,chPhi,chZ);
 
-                h1_wf=eventHistograms.at(converter.channelEvent.channelNums-1);
-                SetWaveformHistogram(converter.channelEvent.adcValues,h1_wf,h_name,h_title);
-                converter.channelEvent.integral=SetChannelIntegral(h1_wf,iBinStart,iBinStop,iBinLeft,iBinRight);
-
-                if (h1_wf != nullptr) {
-                    WfDir->cd();
-                    //h1_wf->Write();
-                    //eventHistograms.push_back(h1_wf);
-                }
+                SetWaveformHistogram(converter.channelEvent.adcValues,h1_wf,h_name,h_title);                
+                SetChannelPeakIntegralAmp(converter.channelEvent, h1_wf,iBinStart,iBinStop,iBinLeft,iBinRight);
+                
+                if(GetPedestalAmpl(converter.channelEvent.adcValues, iBinPedestalSkip,iBinPedestalCount)>100)continue;
+                ChannelDataInEvent.push_back(converter.channelEvent);
+                
+                h2_int_ch->Fill(chNum-1,converter.channelEvent.integral);
                 
                 converter.outFile->cd();
-                //if(targetEvent>0)converter.channelEvent.Print();
                 converter.FillTreeData();
-            }
-        }
+            } //end ReadChannel
+        } //end ReadADC
 
-        if (!eventHistograms.empty()) {
-            WfDir->cd();
-            DrawAllWaveformsOnOneCanvas(converter, converter.EventNumber, eventHistograms, WfDir);
-        }
+        WfDir->cd();
+        if(ChannelDataInEvent.size()>20)DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
 
-        // for (auto hist : eventHistograms) {
-        //     delete hist;
-        // }
-        // eventHistograms.clear();
+        ChannelDataInEvent.clear();
 
-        //savedDir->cd();
-        
         if (targetEvent > 0) {
             break;
         }
     }
+
+    converter.outFile->cd();
+    h2_int_ch->Write();
 
     //ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
     std::cout << "\n\nOutput saved to: " << outputData <<"\n\n"<< std::endl;
