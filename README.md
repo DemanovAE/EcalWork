@@ -17,10 +17,10 @@ make
 # Библиотека будет создана: build/libMPDDataConverter.so
 
 # Интерактивный режим
-root -l ecalWork.C
+root -l EcalWork.cpp
 
 # Batch режим
-root -l -b -q ecalWork.C
+root -l -b -q EcalWork.cpp
 
 # С параметрами
-root -l -b -q 'ecalWork.C("input.data", "output.root", -1)'
+root -l -b -q 'EcalWork.cpp("input.data", "output.root", -1)'

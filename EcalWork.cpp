@@ -616,6 +616,16 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
     converter.SetTypeWaveForms(TypeWaveForms::invert);
     converter.InitTree();
 
+    std::filesystem::path outRootPath(outputData);
+    std::filesystem::path outDir = outRootPath.parent_path();
+    if (outDir.empty()) {
+        outDir = ".";
+    }
+    std::filesystem::path pictDir = outDir / "pict";
+    std::filesystem::create_directories(pictDir);
+    gSystem->ChangeDirectory(pictDir.string().c_str());
+    std::cout << "Pictures will be saved under: " << pictDir << std::endl;
+
     Int_t nBinsSamples = 60;
     Float_t SamplesMin = 0 - 0.5;
     Float_t SamplesMax = 60 - 0.5;
