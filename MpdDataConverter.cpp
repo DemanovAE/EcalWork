@@ -398,7 +398,7 @@ uint32_t MpdDataConverter::readWord(TypeReadByte type) {
             break;
     }
 
-    if (g_CountReadFileByte % (1024 * 1024) < 4) {
+    if (g_CountReadFileByte % (1024 * 1024) == 0 || g_CountReadFileByte == g_LenFile) {
         ProgressBar(g_CountReadFileByte, g_LenFile);
     }
 
@@ -498,12 +498,22 @@ bool MpdDataConverter::ReadChannel(){
     channelEvent.timestamp_f = SetTimeStampNs(channelEvent.timestamp_sec,channelEvent.timestamp_ns);    
     if(channelEvent.adcValues.size()>0){
         channelEvent.numSamples=channelEvent.adcValues.size();
+        channelEvent.pedestal=SetPedestal();
+        PedestalSubtraction();
     }
 
     //SkipBytes(g_LenChannel-g_CountReadChannelByte);
 
     return true;
 };
+
+void MpdDataConverter::PedestalSubtraction()
+{
+    for (int i = 0; i < channelEvent.adcValues.size(); i++)
+    {
+        channelEvent.adcValues[i] = channelEvent.adcValues[i] - channelEvent.pedestal;
+    }
+}
 
 Int_t MpdDataConverter::AdcSampleValueFirst(uint32_t _adcValue){
     uint16_t raw = (_adcValue >> 16) & 0xFFFF;
@@ -532,4 +542,32 @@ ULong64_t MpdDataConverter::SetTimeStampNs(uint32_t _sec, uint32_t _ns){
 Short_t MpdDataConverter::SetChannelNum(uint32_t _AdcId, uint32_t _chNum){    
     if(_AdcId==0)return -1;
     return (_AdcId-1)*64 + _chNum;
+}
+
+Int_t MpdDataConverter::SetPedestal(){
+    Int_t SumAdc = 0;
+    Int_t nCount = 0;
+    Int_t result = 0;
+    if (channelEvent.adcValues.size() == 0)
+        return 0;
+
+    for (int i = pedestal_Skip; i < (pedestal_Skip + pedestal_count); i++)
+    {
+        SumAdc += channelEvent.adcValues[i];
+        nCount++;
+    }
+    result = (Int_t)(SumAdc / nCount);
+    return result;
+}
+
+Int_t MpdDataConverter::GetPedestalAmpl()
+{
+    Int_t SumAdc = 0;
+    Int_t nCount = 0;
+    if (channelEvent.adcValues.size() == 0)
+        return 0;
+
+    auto [minIt, maxIt] = std::minmax_element(channelEvent.adcValues.begin(), channelEvent.adcValues.begin() + pedestal_Skip + pedestal_count);
+
+    return TMath::Abs(*maxIt - *minIt);
 }

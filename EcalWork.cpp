@@ -1,4 +1,5 @@
 #include "MpdDataConverter.h"
+#include <algorithm>
 #include <cstddef>
 #include <ostream>
 #include <iostream>
@@ -6,6 +7,7 @@
 #include <string>
 #include <cstdlib>
 #include <vector>
+#include <set>
 
 #include "Rtypes.h"
 #include "RtypesCore.h"
@@ -25,7 +27,7 @@
 #include "TGraphErrors.h"
 
 #if ROOT_VERSION_CODE >= ROOT_VERSION(6, 0, 0)
-R__LOAD_LIBRARY(./build/libMPDDataConverter.dylib)
+R__LOAD_LIBRARY(./build/libMPDDataConverter.so)
 #endif
 
 template <typename T>
@@ -202,44 +204,6 @@ void DrawAllWaveformsOnOneCanvas(std::vector<ChannelData> _ChData,
     canvas = nullptr;
     legend = nullptr;
     AxisHisto = nullptr;
-}
-
-Int_t SetPedestal(std::vector<Int_t> _adc_value, Int_t _Skip, Int_t _count)
-{
-    Int_t SumAdc = 0;
-    Int_t nCount = 0;
-    Int_t result = 0;
-    if (_adc_value.size() == 0)
-        return 0;
-
-    for (int i = _Skip; i < (_Skip + _count); i++)
-    {
-        SumAdc += _adc_value[i];
-        nCount++;
-    }
-    result = (Int_t)(SumAdc / nCount);
-    return result;
-}
-
-void PedestalSubtraction(std::vector<Int_t> &_ch_Data, Int_t _pedestal)
-{
-    for (int i = 0; i < _ch_Data.size(); i++)
-    {
-        _ch_Data[i] = _ch_Data[i] - _pedestal;
-    }
-}
-
-Int_t GetPedestalAmpl(std::vector<Int_t> _adc_value, Int_t _Skip, Int_t _count)
-{
-    Int_t SumAdc = 0;
-    Int_t nCount = 0;
-    Int_t result = 0;
-    if (_adc_value.size() == 0)
-        return 0;
-
-    auto [minIt, maxIt] = std::minmax_element(_adc_value.begin(), _adc_value.begin() + _Skip + _count);
-
-    return TMath::Abs(*maxIt - *minIt);
 }
 
 void SetChannelIntegralAmp(ChannelData &_chData, TH1F *hist, int binStart, int binEnd, int nBinLeft, int nBinRight)
@@ -560,16 +524,13 @@ double ComputeNeighborContamination(const std::vector<ChannelData> &eventHits,
 }
 
 void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
-              std::string outputData = "out2.root",
+              std::string outputData = "out_test.root",
               int targetEvent = -1)
 {
 
     TStopwatch timer1;
     timer1.Start();
 
-    // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
-    Int_t iBinPedestalSkip = 2;
-    Int_t iBinPedestalCount = 10;
     // Для поиска пика
     Int_t iBinStart = 20;
     Int_t iBinStop = 50;
@@ -594,26 +555,9 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
 
     converter.OpenInputFile(inputData);
     converter.OpenOutRootFile(outputData);
-
-    // Base directory = directory of the output ROOT file
-    std::filesystem::path outRootPath(outputData);
-    std::filesystem::path outDir = outRootPath.parent_path();
-    if (outDir.empty())
-    {
-        outDir = ".";
-    }
-
-    // Create pict subfolder next to the ROOT file
-    std::filesystem::path pictDir = outDir / "pict";
-    std::filesystem::create_directories(pictDir);
-
-    // Change process working directory so relative paths point there
-    gSystem->ChangeDirectory(pictDir.string().c_str());
-
-    std::cout << "Pictures will be saved under: " << pictDir << std::endl;
-
     // converter.WriteChannelSamplesVector();
     converter.SetTypeWaveForms(TypeWaveForms::invert);
+    converter.SetPedestalPar(/*pedestal_Skip*/2, /*pedestal_count*/10); // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
     converter.InitTree();
 
     std::filesystem::path outRootPath(outputData);
@@ -678,10 +622,6 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
         {
             while (converter.ReadChannel())
             {
-
-                // Считаем подложку и вычитем ее
-                converter.channelEvent.pedestal = SetPedestal(converter.channelEvent.adcValues, iBinPedestalSkip, iBinPedestalCount);
-                PedestalSubtraction(converter.channelEvent.adcValues, converter.channelEvent.pedestal);
 
                 // Далее гистограмм для WF и подсчета интеграла
                 int evNum = converter.channelEvent.eventNum;
@@ -791,6 +731,138 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
     // ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
     std::cout << "\n\nOutput saved to: " << outputData << "\n\n"
               << std::endl;
+
+    converter.WriteTreeAndClose();
+
+    timer1.Stop();
+    timer1.Print();
+}
+
+
+
+
+
+void ConvertToRoot( int targetEvent = -1,
+                    std::vector<int> targetEvents={},
+                    std::string inputData = "../run_rc-hs1_088.data",
+                    std::string outputData = "out2.root")
+{
+
+    TStopwatch timer1;
+    timer1.Start();
+
+    // Для поиска пика
+    Int_t iBinStart = 20;
+    Int_t iBinStop = 50;
+    // Интеграл вокруг пика
+    Int_t iBinLeft = 4;
+    Int_t iBinRight = 16;
+
+    InitChannelMap("basket_channel_map_phiZ.csv");
+
+    MpdDataConverter converter;
+
+    converter.OpenInputFile(inputData);
+    converter.OpenOutRootFile(outputData);
+    // converter.WriteChannelSamplesVector();
+    converter.SetTypeWaveForms(TypeWaveForms::invert);
+    converter.SetPedestalPar(/*pedestal_Skip*/2, /*pedestal_count*/10); // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
+    converter.InitTree();
+
+    std::filesystem::path outRootPath(outputData);
+    std::filesystem::path outDir = outRootPath.parent_path();
+    if (outDir.empty()) {
+        outDir = ".";
+    }
+    std::filesystem::path pictDir = outDir / "pict";
+    std::filesystem::create_directories(pictDir);
+    gSystem->ChangeDirectory(pictDir.string().c_str());
+    std::cout << "Pictures will be saved under: " << pictDir << std::endl;
+
+    Int_t nBinsSamples = 60;
+    Float_t SamplesMin = 0 - 0.5;
+    Float_t SamplesMax = 60 - 0.5;
+
+    TH1F *h1_wf = new TH1F("hist", "", nBinsSamples, SamplesMin, SamplesMax);
+
+    Int_t MaxNChannels = 64 * 12;
+    std::vector<TH1F *> eventHistograms;
+    eventHistograms.reserve(MaxNChannels);
+    for (int i = 0; i < MaxNChannels; i++)
+    {
+        eventHistograms.push_back(new TH1F(Form("histo_%i", i), "", nBinsSamples, SamplesMin, SamplesMax));
+    }
+
+    std::vector<ChannelData> ChannelDataInEvent;
+    ChannelDataInEvent.reserve(MaxNChannels);
+
+    TH2D *h2_integral_z_phi = new TH2D("h2", ";Z;Phi", 64, 0.5, 64.5, 12, 0.5, 12.5);
+    h2_integral_z_phi->GetXaxis()->SetNdivisions(13, 5, kTRUE);
+    h2_integral_z_phi->GetYaxis()->SetNdivisions(12, 0, kTRUE);
+    h2_integral_z_phi->SetBit(TH1::kNoStats);
+
+    std::vector<TLine *> UserGridXY;
+    for (int j = 1; j <= 12; j++){
+        UserGridXY.push_back(new TLine(0.5, j + 0.5, 64.5, j + 0.5));
+    }
+    for (int i = 1; i <= 64; i++){
+        UserGridXY.push_back(new TLine(i + 0.5, 0.5, i + 0.5, 12.5));
+    }
+
+    TDirectory *WfDir = converter.outFile->mkdir("channel_wf");
+    WfDir->cd();
+
+    // while (converter.ReadEvent() && converter.EventNumber<1000){
+    while (converter.ReadEvent())
+    {
+
+        if (targetEvent > 0 && converter.EventNumber != (uint32_t)targetEvent){
+            continue;
+        }
+
+        if (!targetEvents.empty()){
+            if(std::find(targetEvents.begin(), targetEvents.end(), (uint32_t)targetEvent) != targetEvents.end()){
+                continue;
+            }
+        }
+
+        ChannelDataInEvent.clear();
+
+        while (converter.ReadADC())
+        {
+            while (converter.ReadChannel())
+            {
+                // Далее гистограмм для WF и подсчета интеграла
+                int evNum = converter.channelEvent.eventNum;
+                int chNum = converter.channelEvent.channelNums;
+                int chPhi = converter.channelEvent.channel_Phi;
+                int chZ = converter.channelEvent.channel_Z;
+                std::string h_name = Form("h_ev_%i_ch_%i_phi_%i_z_%i", evNum, chNum, chPhi, chZ);
+                std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i", evNum, chNum, chPhi, chZ);
+
+                SetWaveformHistogram(converter.channelEvent.adcValues, h1_wf, h_name, h_title);
+                SetChannelIntegralAmp(converter.channelEvent, h1_wf, iBinStart, iBinStop, iBinLeft, iBinRight);
+                ChannelDataInEvent.push_back(converter.channelEvent);
+                converter.FillTreeData();
+            } // end ReadChannel
+        } // end ReadADC
+
+        WfDir->cd();
+
+        if(targetEvent > 0 || targetEvents.empty()==false){
+            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
+            if (converter.EventNumber >= targetEvents.back()){
+                break;
+            }
+        }
+        if (targetEvent > 0){
+            break;
+        }
+    }
+
+    converter.outFile->cd();
+
+    std::cout << "\nOutput Tree saved to: " << outputData << "\n"<< std::endl;
 
     converter.WriteTreeAndClose();
 

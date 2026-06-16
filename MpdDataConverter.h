@@ -75,6 +75,9 @@ class MpdDataConverter {
         Int_t wf_add_val = 30000;
         Int_t wf_scale = -1;
 
+        Int_t pedestal_Skip = 2; 
+        Int_t pedestal_count = 10;
+
         TFile* outFile = nullptr;
         std::ifstream inFile;
         TTree* tree = nullptr;
@@ -91,6 +94,7 @@ class MpdDataConverter {
         
         void WriteChannelSamplesVector(){this->wChSamplesVector=true;};
         void SetTypeWaveForms(TypeWaveForms _type){ this->g_TypeWF=_type; };
+        void SetPedestalPar(Int_t a, Int_t b){this->pedestal_Skip=a; this->pedestal_count=b;};
 
         void OpenInputFile(std::string inputData);
         void OpenOutRootFile(std::string outputData);
@@ -105,6 +109,7 @@ class MpdDataConverter {
         //Это если просто надо конвертнуть данные в root дерево без обработки.
         void FullConvertData2TreeRoot();
         void showProgress(uint64_t current, uint64_t total, int barWidth = 45);
+        void PedestalSubtraction();
 
         bool ReadEvent();
         bool ReadADC();
@@ -115,8 +120,9 @@ class MpdDataConverter {
         Int_t AdcSampleValueFirst(uint32_t _adcValue);
         Int_t AdcSampleValueSecond(uint32_t _adcValue);
         Int_t ChangeWfValue(Int_t _value);
-        Int_t GetMaximumAdcValue(Int_t startIndex, Int_t endIndex);
-        Int_t GetMinimumAdcValue(Int_t startIndex, Int_t endIndex);
+        Int_t SetPedestal();
+        Int_t GetPedestalAmpl();
+
         ~MpdDataConverter();
 
 };
