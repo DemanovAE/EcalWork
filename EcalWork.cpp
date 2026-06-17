@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <vector>
 #include <set>
+#include <filesystem>
 
 #include "Rtypes.h"
 #include "RtypesCore.h"
@@ -20,15 +21,18 @@
 #include "TCanvas.h"
 #include "TLegend.h"
 #include "TLine.h"
-
-#include <filesystem>
+#include "TTreeReader.h"
 #include "TSystem.h"
 #include "TF1.h"
 #include "TGraphErrors.h"
 
+
 #if ROOT_VERSION_CODE >= ROOT_VERSION(6, 0, 0)
 R__LOAD_LIBRARY(./build/libMPDDataConverter.so)
 #endif
+
+const int NCHANNELS = 768;
+constexpr int MAX_CH = 65;
 
 template <typename T>
 void SetWaveformHistogram(
@@ -238,14 +242,6 @@ void SetChannelIntegralAmp(ChannelData &_chData, TH1F *hist, int binStart, int b
     //_chData.Print();
 }
 
-void ResetTH1Fvector(std::vector<TH1F *> &hists, std::vector<int> iNumClear)
-{
-    for (int i = 0; i < iNumClear.size(); i++)
-    {
-        hists[iNumClear[i]]->Reset();
-    }
-}
-
 void FitTargetChannelHistograms(TFile *outFile,
                                 const std::string &inputDirName = "target_channels",
                                 const std::string &outputDirName = "fitted_target_channels",
@@ -272,8 +268,6 @@ void FitTargetChannelHistograms(TFile *outFile,
         dirOut = outFile->mkdir(outputDirName.c_str());
     }
     dirOut->cd();
-
-    const int NCHANNELS = 768;
 
     std::vector<double> v_ch;
     std::vector<double> v_mpv;
@@ -523,22 +517,81 @@ double ComputeNeighborContamination(const std::vector<ChannelData> &eventHits,
     return sumNeighbors / denom;
 }
 
-void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
-              std::string outputData = "out_test.root",
-              int targetEvent = -1)
+bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_int_per_channel, TH1D *hCut)
+{
+    std::vector<int> _PhiCount(12);
+    std::vector<int> _ZCount(64);
+    std::vector<ChannelData> data;
+    data.reserve(eventCh.size());
+
+    for(int i=0; i<eventCh.size();i++){
+
+        if(eventCh[i].amplitude<100) continue;
+        hCut->Fill(2);
+    
+        if(eventCh[i].integral<500) continue;
+        hCut->Fill(3);
+        
+        data.push_back(eventCh[i]);
+        _PhiCount[eventCh[i].channel_Phi-1]++;
+        _ZCount[eventCh[i].channel_Z-1]++;
+    }
+    
+    if(data.size()<5){
+        eventCh.clear();
+        return false;
+    }
+    hCut->Fill(4,data.size());
+
+    int max_PhiCount = *std::max_element(_PhiCount.begin(), _PhiCount.end());
+    int max_ZCount = *std::max_element(_ZCount.begin(), _ZCount.end());
+    if (max_PhiCount < 5 && max_ZCount < 5) return false;
+
+    //if(data[0].eventNum<120)eventCh.back().Print();
+
+
+    hCut->Fill(5,data.size());
+
+    // User-configurable threshold_3 (e.g. 0.20 = 20%)
+    const double threshold_3 = 0.20;
+
+    // --- New 4.3: contamination check from neighboring channels ---
+    double sumSelected = 0.0;
+    double sumNeighbors = 0.0;
+
+    // For now, treat all hits in ChannelDataInEvent as "target + selecting channels"
+    double contamination = ComputeNeighborContamination(data,
+                                                        sumSelected,
+                                                        sumNeighbors,
+                                                        /*maxDeltaPhi=*/1,
+                                                        /*maxDeltaZ=*/1);
+
+    if (contamination > threshold_3){
+        // Reject this event as multi-muon (or heavily contaminated) in neighboring cells
+        eventCh.clear();
+        return false;
+    }
+
+    hCut->Fill(6,data.size());
+
+    for (int i = 0; i < data.size(); i++){
+        int ch = data[i].channelNums;
+        if (ch >= 1 && ch <= NCHANNELS){
+            h_int_per_channel[ch - 1]->Fill(data[i].integral);
+        }
+    }
+    eventCh.clear();
+    eventCh=std::move(data);
+
+    return true;
+}
+
+void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = "transver_x_38.root")
 {
 
     TStopwatch timer1;
     timer1.Start();
 
-    // Для поиска пика
-    Int_t iBinStart = 20;
-    Int_t iBinStop = 50;
-    // Интеграл вокруг пика
-    Int_t iBinLeft = 4;
-    Int_t iBinRight = 16;
-
-    const int NCHANNELS = 768;
     std::vector<TH1F *> h_int_per_channel;
     h_int_per_channel.reserve(NCHANNELS);
     for (int i = 0; i < NCHANNELS; ++i)
@@ -549,16 +602,24 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
                      100, 0, 15000));
     }
 
-    InitChannelMap("basket_channel_map_phiZ.csv");
+    TFile *outFile = new TFile(Form("%s",outputData.c_str()),"RECREATE");
 
-    MpdDataConverter converter;
+    TFile *iFile = TFile::Open(inputDataTree.c_str());
+    TTreeReader reader("events", iFile);
 
-    converter.OpenInputFile(inputData);
-    converter.OpenOutRootFile(outputData);
-    // converter.WriteChannelSamplesVector();
-    converter.SetTypeWaveForms(TypeWaveForms::invert);
-    converter.SetPedestalPar(/*pedestal_Skip*/2, /*pedestal_count*/10); // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
-    converter.InitTree();
+    TTreeReaderValue<UInt_t> eventNumber(reader, "eventNum");
+    TTreeReaderValue<Int_t> chInt(reader, "integral");
+    TTreeReaderValue<Int_t> chAmp(reader, "amplitude");
+    TTreeReaderValue<unsigned short> chNum(reader, "channelNums");
+    TTreeReaderValue<unsigned short> chZ(reader, "channel_Z");
+    TTreeReaderValue<unsigned short> chPhi(reader, "channel_Phi");
+
+    TH1D *h1_evNum = new TH1D("event_number",";event;count",2.0e6,0,2.0e6);
+    TH1D *h1_chNum = new TH1D("channel_number",";Num;count",NCHANNELS,0.5,(Float_t)NCHANNELS+0.5);
+    TH1D *h1_chZ = new TH1D("channel_Z",";Z;count",64,0.5,64.5);
+    TH1D *h1_chPhi = new TH1D("channel_Phi",";Phi;count",12,0.5,12.5);
+    TH1D *h1_chAmp = new TH1D("channel_amplitude",";Amp;count",100,0,10000);
+    TH1D *h1_chInt = new TH1D("channel_integral",";Amp;count",300,0,15000);
 
     std::filesystem::path outRootPath(outputData);
     std::filesystem::path outDir = outRootPath.parent_path();
@@ -570,146 +631,77 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
     gSystem->ChangeDirectory(pictDir.string().c_str());
     std::cout << "Pictures will be saved under: " << pictDir << std::endl;
 
-    Int_t nBinsSamples = 60;
-    Float_t SamplesMin = 0 - 0.5;
-    Float_t SamplesMax = 60 - 0.5;
-
-    TH1F *h1_wf = new TH1F("hist", "", nBinsSamples, SamplesMin, SamplesMax);
-
-    Int_t MaxNChannels = 64 * 12;
-    std::vector<TH1F *> eventHistograms;
-    eventHistograms.reserve(MaxNChannels);
-    for (int i = 0; i < MaxNChannels; i++)
-    {
-        eventHistograms.push_back(new TH1F(Form("histo_%i", i), "", nBinsSamples, SamplesMin, SamplesMax));
-    }
-    TH2D *h2_int_ch = new TH2D(Form("ch_integral"), ";channel Num;Integral", MaxNChannels, 0.5, MaxNChannels + 0.5, 700, 0, 700000);
-
-    std::vector<ChannelData> ChannelDataInEvent;
-    ChannelDataInEvent.reserve(MaxNChannels);
-
-    TH2D *h2_integral_z_phi = new TH2D("h2", ";Z;Phi", 64, 0.5, 64.5, 12, 0.5, 12.5);
-    h2_integral_z_phi->GetXaxis()->SetNdivisions(13, 5, kTRUE);
-    h2_integral_z_phi->GetYaxis()->SetNdivisions(12, 0, kTRUE);
-    h2_integral_z_phi->SetBit(TH1::kNoStats);
-
-    std::vector<TLine *> UserGridXY;
-    for (int j = 1; j <= 12; j++)
-    {
-        UserGridXY.push_back(new TLine(0.5, j + 0.5, 64.5, j + 0.5));
-    }
-    for (int i = 1; i <= 64; i++)
-    {
-        UserGridXY.push_back(new TLine(i + 0.5, 0.5, i + 0.5, 12.5));
-    }
-
-    TDirectory *WfDir = converter.outFile->mkdir("channel_wf");
+    TDirectory *WfDir = outFile->mkdir("channel_wf");
     WfDir->cd();
+    
+    UInt_t currentEventNum = 0;
+    bool hasData = false;
+    std::vector<ChannelData> ChannelDataInEvent;
+    ChannelDataInEvent.reserve(NCHANNELS);
 
-    // while (converter.ReadEvent() && converter.EventNumber<1000){
-    while (converter.ReadEvent())
-    {
+    TH1D *h_CountCut = new TH1D("hCountCut","Number of events after applying cut;;count",20,-0.5,19.5);
 
-        if (targetEvent > 0 && converter.EventNumber != (uint32_t)targetEvent)
-        {
-            continue;
+    while (reader.Next()) {
+        ChannelData data;
+        data.eventNum = *eventNumber;
+        data.integral = *chInt;
+        data.amplitude = *chAmp;
+        data.channelNums = *chNum;
+        data.channel_Z = *chZ;
+        data.channel_Phi = *chPhi;
+        
+        h_CountCut->Fill(0.);
+
+        //Проверка на конец дерева
+        if (data.eventNum == 0) {
+            data.eventNum = currentEventNum + 1; // Новый номер, чтобы вызвать обработку
         }
-
-        ChannelDataInEvent.clear();
-        std::vector<int> _PhiCount(12);
-
-        while (converter.ReadADC())
-        {
-            while (converter.ReadChannel())
+        
+        if (!hasData) {
+            currentEventNum = data.eventNum;
+            hasData = true;
+        } else if (data.eventNum != currentEventNum) { // Тут все действия с одним событием и каналами сработавшими в событии
+            if(ChannelDataInEvent.size()<=MAX_CH)
             {
-
-                // Далее гистограмм для WF и подсчета интеграла
-                int evNum = converter.channelEvent.eventNum;
-                int chNum = converter.channelEvent.channelNums;
-                int chPhi = converter.channelEvent.channel_Phi;
-                int chZ = converter.channelEvent.channel_Z;
-                std::string h_name = Form("h_ev_%i_ch_%i_phi_%i_z_%i", evNum, chNum, chPhi, chZ);
-                std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i", evNum, chNum, chPhi, chZ);
-
-                SetWaveformHistogram(converter.channelEvent.adcValues, h1_wf, h_name, h_title);
-                SetChannelIntegralAmp(converter.channelEvent, h1_wf, iBinStart, iBinStop, iBinLeft, iBinRight);
-
-                if (converter.channelEvent.amplitude < 100)
-                    continue;
-                if (converter.channelEvent.integral < 500)
-                    continue;
-                _PhiCount.at(chPhi - 1)++;
-
-                ChannelDataInEvent.push_back(converter.channelEvent);
-
-                // int ch = converter.channelEvent.channelNums;
-                // h_int_per_channel[ch - 1]->Fill(converter.channelEvent.integral);
-
-                // converter.outFile->cd();
-                // converter.FillTreeData();
-            } // end ReadChannel
-        } // end ReadADC
-
-        WfDir->cd();
-
-        if (ChannelDataInEvent.size() < 5)
-            continue;
-        if (ChannelDataInEvent.size() > 128)
-            continue;
-
-        int max_PhiCount = *std::max_element(_PhiCount.begin(), _PhiCount.end());
-        if (max_PhiCount < 5)
-            continue;
-
-        // --- New 4.3: contamination check from neighboring channels ---
-        double sumSelected = 0.0;
-        double sumNeighbors = 0.0;
-
-        // For now, treat all hits in ChannelDataInEvent as "target + selecting channels"
-        double contamination = ComputeNeighborContamination(ChannelDataInEvent,
-                                                            sumSelected,
-                                                            sumNeighbors,
-                                                            /*maxDeltaPhi=*/1,
-                                                            /*maxDeltaZ=*/1);
-
-        // User-configurable threshold_3 (e.g. 0.20 = 20%)
-        const double threshold_3 = 0.20;
-
-        if (contamination > threshold_3)
-        {
-            // Reject this event as multi-muon (or heavily contaminated) in neighboring cells
-            continue;
-        }
-
-        for (int i = 0; i < ChannelDataInEvent.size(); i++)
-        {
-            converter.channelEvent = ChannelDataInEvent[i];
-            converter.FillTreeData();
-            h2_int_ch->Fill(converter.channelEvent.channelNums, converter.channelEvent.integral);
-
-            int ch = converter.channelEvent.channelNums;
-            if (ch >= 1 && ch <= NCHANNELS)
-            {
-                h_int_per_channel[ch - 1]->Fill(converter.channelEvent.integral);
+                h_CountCut->Fill(1,ChannelDataInEvent.size());
+                
+                if( TransverseAnalysis(ChannelDataInEvent,h_int_per_channel,h_CountCut) ){
+                    for(int i=0; i<ChannelDataInEvent.size();i++){
+                        h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+                        h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+                        h1_chInt->Fill(ChannelDataInEvent[i].integral);
+                        h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+                        h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+                        h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+                    }
+                }
             }
-        }
-        // DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
-
-        // int ch = converter.channelEvent.channelNums;
-        // h_int_per_channel[ch - 1]->Fill(converter.channelEvent.integral);
-        if (targetEvent > 0)
-        {
+            ChannelDataInEvent.clear();
+            currentEventNum = data.eventNum;
+        } // конец магии над событием
+        
+        // Если это была сторожевая запись - выходим (не добавляем её)
+        if (*eventNumber == 0) {
             break;
         }
+
+        ChannelDataInEvent.push_back(data);
     }
 
-    converter.outFile->cd();
-
+    outFile->cd();
+    h1_evNum->Write();
+    h_CountCut->Write();
+    h1_chAmp->Write();
+    h1_chInt->Write();
+    h1_chNum->Write();
+    h1_chPhi->Write();
+    h1_chZ->Write();
+    
     // Create (or get) subdirectory for target-channel histograms
     TDirectory *dirTargets = nullptr;
-    if (!(dirTargets = (TDirectory *)converter.outFile->Get("target_channels")))
+    if (!(dirTargets = (TDirectory *)outFile->Get("target_channels")))
     {
-        dirTargets = converter.outFile->mkdir("target_channels");
+        dirTargets = outFile->mkdir("target_channels");
     }
 
     // Move into that subdirectory
@@ -723,25 +715,17 @@ void EcalWork(std::string inputData = "../run_rc-hs1_088.data",
         h->Write();
     }
 
-    h2_int_ch->Write();
-
-    converter.outFile->cd();
-    FitTargetChannelHistograms(converter.outFile);
+    outFile->cd();
+    FitTargetChannelHistograms(outFile);
 
     // ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
-    std::cout << "\n\nOutput saved to: " << outputData << "\n\n"
-              << std::endl;
-
-    converter.WriteTreeAndClose();
+    std::cout << "\n\nOutput saved to: " << outputData << "\n\n"<< std::endl;
 
     timer1.Stop();
     timer1.Print();
 }
 
-
-
-
-
+//Convert iFile.data to oFile.root without cuts
 void ConvertToRoot( int targetEvent = -1,
                     std::vector<int> targetEvents={},
                     std::string inputData = "../run_rc-hs1_088.data",
@@ -785,16 +769,15 @@ void ConvertToRoot( int targetEvent = -1,
 
     TH1F *h1_wf = new TH1F("hist", "", nBinsSamples, SamplesMin, SamplesMax);
 
-    Int_t MaxNChannels = 64 * 12;
     std::vector<TH1F *> eventHistograms;
-    eventHistograms.reserve(MaxNChannels);
-    for (int i = 0; i < MaxNChannels; i++)
+    eventHistograms.reserve(NCHANNELS);
+    for (int i = 0; i < NCHANNELS; i++)
     {
         eventHistograms.push_back(new TH1F(Form("histo_%i", i), "", nBinsSamples, SamplesMin, SamplesMax));
     }
 
     std::vector<ChannelData> ChannelDataInEvent;
-    ChannelDataInEvent.reserve(MaxNChannels);
+    ChannelDataInEvent.reserve(NCHANNELS);
 
     TH2D *h2_integral_z_phi = new TH2D("h2", ";Z;Phi", 64, 0.5, 64.5, 12, 0.5, 12.5);
     h2_integral_z_phi->GetXaxis()->SetNdivisions(13, 5, kTRUE);
@@ -849,16 +832,22 @@ void ConvertToRoot( int targetEvent = -1,
 
         WfDir->cd();
 
+        if(ChannelDataInEvent.size()>64)
+
         if(targetEvent > 0 || targetEvents.empty()==false){
             DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
             if (converter.EventNumber >= targetEvents.back()){
                 break;
             }
-        }
-        if (targetEvent > 0){
-            break;
+            if(targetEvent>0){
+                break;
+            }
         }
     }
+
+    //Запись последнего ивента со всеми значенями равными 0.
+    converter.channelEvent.Clear();
+    converter.FillTreeData();
 
     converter.outFile->cd();
 
