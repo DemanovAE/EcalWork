@@ -553,7 +553,7 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_
     hCut->Fill(5,data.size());
 
     // User-configurable threshold_3 (e.g. 0.20 = 20%)
-    const double threshold_3 = 0.20;
+    const double threshold_3 = 0.10;
 
     // --- New 4.3: contamination check from neighboring channels ---
     double sumSelected = 0.0;
@@ -586,11 +586,37 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_
     return true;
 }
 
-void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = "transver_x_38.root")
+
+
+
+bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_int_per_channel, TH1D *hCut)
+{
+    std::vector<ChannelData> data;
+    data.reserve(eventCh.size());
+
+    for(int i=0; i<eventCh.size();i++){
+        if(eventCh[i].amplitude<100) continue;
+        hCut->Fill(2);
+        data.push_back(eventCh[i]);
+    }
+    
+
+    
+
+
+    eventCh.clear();
+    eventCh=std::move(data);
+
+    return true;
+}
+
+void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = "long_x_38.root")
 {
 
     TStopwatch timer1;
     timer1.Start();
+
+    bool TransverAnalysis = false;
 
     std::vector<TH1F *> h_int_per_channel;
     h_int_per_channel.reserve(NCHANNELS);
@@ -661,18 +687,31 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
             currentEventNum = data.eventNum;
             hasData = true;
         } else if (data.eventNum != currentEventNum) { // Тут все действия с одним событием и каналами сработавшими в событии
-            if(ChannelDataInEvent.size()<=MAX_CH)
+            if(ChannelDataInEvent.size()<=2*MAX_CH)
             {
                 h_CountCut->Fill(1,ChannelDataInEvent.size());
                 
-                if( TransverseAnalysis(ChannelDataInEvent,h_int_per_channel,h_CountCut) ){
-                    for(int i=0; i<ChannelDataInEvent.size();i++){
-                        h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
-                        h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
-                        h1_chInt->Fill(ChannelDataInEvent[i].integral);
-                        h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
-                        h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
-                        h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+                if(TransverAnalysis){
+                    if(TransverseAnalysis(ChannelDataInEvent,h_int_per_channel,h_CountCut) ){
+                        for(int i=0; i<ChannelDataInEvent.size();i++){
+                            h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+                            h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+                            h1_chInt->Fill(ChannelDataInEvent[i].integral);
+                            h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+                            h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+                            h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+                        }
+                    }
+                }else{
+                    if(LongAnalysis(ChannelDataInEvent,h_int_per_channel,h_CountCut) ){
+                        for(int i=0; i<ChannelDataInEvent.size();i++){
+                            h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+                            h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+                            h1_chInt->Fill(ChannelDataInEvent[i].integral);
+                            h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+                            h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+                            h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+                        }
                     }
                 }
             }
