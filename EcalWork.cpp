@@ -772,6 +772,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_p
 
     hCut->Fill(7);
 
+    // std::cout << "Approx deposed energy = " << adc_max_2+adc_max  << "[ADC?]" <<std::endl;
     eventCh.clear();
     eventCh = std::move(data);
 
