@@ -575,7 +575,7 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
     */
     //<---
     // Add the neighbors check here ---> poop from below
-// /*
+    // /*
     std::vector<int> phiStrip, zStrip, stripIndices;
 
     bool hasPhiStrip = FindOneStrip(data, phiStrip, true, 5);
@@ -590,14 +590,14 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
         stripIndices = phiStrip;
     else
         stripIndices = zStrip;
-// */
+    // */
     // if(data[0].eventNum<120)eventCh.back().Print();
     hCut->Fill(5, data.size());
 
     //  User-configurable threshold_3 (e.g. 0.20 = 20%)
     const double threshold_3 = 0.20;
 
-// /*
+    // /*
     // --- New 4.3: contamination check from neighboring channels ---
     double sumSelected = 0.0;
     double sumNeighbors = 0.0;
@@ -612,7 +612,7 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
         eventCh.clear();
         return false;
     }
-// */
+    // */
     hCut->Fill(6, data.size());
 
     for (int i = 0; i < data.size(); i++)
@@ -629,6 +629,87 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
     return true;
 }
 
+// Selection 3x3 Neighbourhood window
+// Finding the second strongest cell
+bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data, ChannelData hottestCell, float &adc_max_2)
+{
+    adc_max_2 = -1;
+    float adc_max = hottestCell.amplitude;
+    int phi_0 = hottestCell.channel_Phi;
+    int z_0 = hottestCell.channel_Z;
+
+    float min_ratio = 0.55; // dummy value
+    float max_ratio = 0.95; // dummy value
+
+    for (int phi = phi_0 - 1; phi <= phi_0 + 1; ++phi)
+    {
+        for (int z = z_0 - 1; z <= z_0 + 1; ++z)
+        {
+
+            // Skip the center cell itself
+            if (phi == phi_0 && z == z_0)
+                continue;
+
+            // Search for any channel with these indices in this event
+            for (const auto &ch : data)
+            {
+                if (ch.channel_Phi == phi && ch.channel_Z == z)
+                {
+                    if (ch.amplitude > adc_max_2)
+                        adc_max_2 = ch.amplitude;
+                }
+            }
+        }
+    }
+
+    float signifOfMax = adc_max / (adc_max + adc_max_2);
+    if (signifOfMax > max_ratio || signifOfMax < min_ratio)
+        return false;
+
+    return true;
+}
+
+bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
+                              const ChannelData &hottestCell,
+                              float &sum5x5,
+                              float &sum3x3,
+                              float &ratio_cut5x5)
+{
+    sum5x5 = 0.0f;
+    sum3x3 = 0.0f;
+    ratio_cut5x5 = -1.0f;
+
+    int phi_0 = hottestCell.channel_Phi;
+    int z_0 = hottestCell.channel_Z;
+
+    for (const auto &ch : data)
+    {
+        int dPhi = std::abs(ch.channel_Phi - phi_0);
+        int dZ = std::abs(ch.channel_Z - z_0);
+
+        // inside 5x5 window
+        if (dPhi <= 2 && dZ <= 2)
+        {
+            sum5x5 += ch.amplitude;
+
+            // inside central 3x3 window
+            if (dPhi <= 1 && dZ <= 1)
+                sum3x3 += ch.amplitude;
+        }
+    }
+
+    if (sum5x5 <= 0.0f)
+        return false;
+
+    // energy fraction outside the compact 3x3 core
+    ratio_cut5x5 = (sum5x5 - sum3x3) / sum5x5;
+
+    float max_diffusivity = 0.2f; // dummy value, tune from data
+    if (ratio_cut5x5 > max_diffusivity)
+        return false;
+
+    return true;
+}
 bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_per_channel, TH1D *hCut)
 {
     std::vector<ChannelData> data;
@@ -639,8 +720,57 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_p
         if (eventCh[i].amplitude < 100)
             continue;
         hCut->Fill(2);
+        if (eventCh[i].integral < 500)
+            continue; // int < 500 is a basic selection  fro all channels in event
+        hCut->Fill(3);
+
         data.push_back(eventCh[i]);
     }
+
+    if (data.empty())
+        return false; // nothing passed cuts, no maximum
+
+    // find element with maximum integral
+    // maximum by amplitude
+    auto itMax = std::max_element(
+        data.begin(), data.end(),
+        [](const ChannelData &a, const ChannelData &b)
+        {
+            return a.amplitude < b.amplitude;
+        });
+
+    if (itMax == eventCh.end())
+        return false;
+
+    const ChannelData &maxCell = *itMax;
+    float adc_max = maxCell.amplitude;
+    // float adc_max_2 = -1;
+    float adc_max_2;
+
+    int maxThreshold = 1000; // dummy value
+    int secondNoise = 50;    // dummy value
+
+    float ration3on3 = 0;
+
+    // 2. Reject if hottest cell is too small
+    if (adc_max < maxThreshold)
+        return false;
+    hCut->Fill(4);
+
+    if (!CheckThreeOnThreeWindow(data, maxCell, adc_max_2))
+        return false;
+    hCut->Fill(5);
+
+    if (adc_max_2 < 500)
+        return false;
+    hCut->Fill(6);
+
+    float sum5x5, sum3x3, ratio_cut5x5;
+
+    if(!CalcAreaFiveOnFiveWindow(data, maxCell, sum5x5, sum3x3, ratio_cut5x5)) 
+        return false;
+
+    hCut->Fill(7);
 
     eventCh.clear();
     eventCh = std::move(data);
@@ -654,7 +784,7 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
     TStopwatch timer1;
     timer1.Start();
 
-    bool TransverAnalysis = true;
+    bool TransverAnalysis = false;
 
     std::vector<TH1F *> h_int_per_channel;
     h_int_per_channel.reserve(NCHANNELS);
@@ -731,7 +861,7 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
         }
         else if (data.eventNum != currentEventNum)
         { // Тут все действия с одним событием и каналами сработавшими в событии
-            if (ChannelDataInEvent.size() <= 2 * MAX_CH)
+            if (ChannelDataInEvent.size() <= MAX_CH)
             {
                 h_CountCut->Fill(1, ChannelDataInEvent.size());
 
