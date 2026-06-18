@@ -601,8 +601,6 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_int_pe
     }
     
 
-    
-
 
     eventCh.clear();
     eventCh=std::move(data);
@@ -768,7 +766,7 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
 void ConvertToRoot( int targetEvent = -1,
                     std::vector<int> targetEvents={},
                     std::string inputData = "../run_rc-hs1_088.data",
-                    std::string outputData = "out2.root")
+                    std::string outputData = "out_all.root")
 {
 
     TStopwatch timer1;
@@ -871,7 +869,10 @@ void ConvertToRoot( int targetEvent = -1,
 
         WfDir->cd();
 
-        if(ChannelDataInEvent.size()>64)
+        //if(ChannelDataInEvent.size()>64)
+
+        if(converter.EventNumber>1500 && converter.EventNumber<2000)
+            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
 
         if(targetEvent > 0 || targetEvents.empty()==false){
             DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
