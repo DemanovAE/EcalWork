@@ -623,6 +623,17 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
             h_int_per_channel[ch - 1]->Fill(data[i].integral);
         }
     }
+
+
+    // for (int i = 0; i < stripIndices.size(); i++)
+    // {
+    //     int ch = data[stripIndices[i]].channelNums;
+    //     if (ch >= 1 && ch <= NCHANNELS)
+    //     {
+    //         h_int_per_channel[ch - 1]->Fill(data[stripIndices[i]].integral);
+    //     }
+    // }
+
     eventCh.clear();
     eventCh = std::move(data);
 
@@ -634,11 +645,11 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
 bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data, ChannelData hottestCell, float &adc_max_2)
 {
     adc_max_2 = -1;
-    float adc_max = hottestCell.amplitude;
+    float adc_max = hottestCell.integral;
     int phi_0 = hottestCell.channel_Phi;
     int z_0 = hottestCell.channel_Z;
 
-    float min_ratio = 0.55; // dummy value
+    float min_ratio = 0.70; // dummy value
     float max_ratio = 0.95; // dummy value
 
     for (int phi = phi_0 - 1; phi <= phi_0 + 1; ++phi)
@@ -655,8 +666,8 @@ bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data, ChannelData hottest
             {
                 if (ch.channel_Phi == phi && ch.channel_Z == z)
                 {
-                    if (ch.amplitude > adc_max_2)
-                        adc_max_2 = ch.amplitude;
+                    if (ch.integral > adc_max_2)
+                        adc_max_2 = ch.integral;
                 }
             }
         }
@@ -688,15 +699,16 @@ bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
         int dZ = std::abs(ch.channel_Z - z_0);
 
         // inside 5x5 window
-        if (dPhi <= 2 && dZ <= 2)
-        {
-            sum5x5 += ch.amplitude;
-
-            // inside central 3x3 window
-            if (dPhi <= 1 && dZ <= 1)
-                sum3x3 += ch.amplitude;
+        if (dPhi == 2 && dZ == 2){
+            sum5x5 += ch.integral;
+        }
+        // inside 5x5 window
+        if (dPhi == 1 && dZ == 1){
+            sum3x3 += ch.integral;
         }
     }
+
+
 
     if (sum5x5 <= 0.0f)
         return false;
@@ -736,41 +748,54 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_p
         data.begin(), data.end(),
         [](const ChannelData &a, const ChannelData &b)
         {
-            return a.amplitude < b.amplitude;
+            return a.integral < b.integral;
         });
 
     if (itMax == eventCh.end())
         return false;
 
     const ChannelData &maxCell = *itMax;
-    float adc_max = maxCell.amplitude;
+    float adc_max = maxCell.integral;
     // float adc_max_2 = -1;
     float adc_max_2;
 
-    int maxThreshold = 1000; // dummy value
-    int secondNoise = 50;    // dummy value
+    //int maxThreshold = 1000; // dummy value
+    //int secondNoise = 50;    // dummy value
 
     float ration3on3 = 0;
 
     // 2. Reject if hottest cell is too small
-    if (adc_max < maxThreshold)
-        return false;
-    hCut->Fill(4);
+    // if (adc_max < maxThreshold)
+    //     return false;
+    hCut->Fill(4,data.size());
 
     if (!CheckThreeOnThreeWindow(data, maxCell, adc_max_2))
         return false;
-    hCut->Fill(5);
+    hCut->Fill(5,data.size());
 
     if (adc_max_2 < 500)
         return false;
-    hCut->Fill(6);
+    hCut->Fill(6,data.size());
 
     float sum5x5, sum3x3, ratio_cut5x5;
 
     if(!CalcAreaFiveOnFiveWindow(data, maxCell, sum5x5, sum3x3, ratio_cut5x5)) 
         return false;
 
-    hCut->Fill(7);
+    hCut->Fill(7,data.size());
+
+    for (int i = 0; i < data.size(); i++)
+    {
+        int ch = data[i].channelNums;
+        if (ch >= 1 && ch <= NCHANNELS)
+        {
+            int phi_0 = maxCell.channel_Phi;
+            int z_0 = maxCell.channel_Z;
+            if(abs(phi_0-data[i].channel_Phi)<=1 && abs(z_0-data[i].channel_Z)<=1 ){
+                h_int_per_channel[ch - 1]->Fill(data[i].integral);
+                }    
+            }
+    }
 
     // std::cout << "Approx deposed energy = " << adc_max_2+adc_max  << "[ADC?]" <<std::endl;
     eventCh.clear();
@@ -1064,20 +1089,18 @@ void ConvertToRoot(int targetEvent = -1,
 
         WfDir->cd();
 
-        if (ChannelDataInEvent.size() > 64)
-
-            if (targetEvent > 0 || targetEvents.empty() == false)
+        if (targetEvent > 0 || targetEvents.empty() == false)
+        {
+            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms, h2_integral_z_phi, UserGridXY, WfDir);
+            if (converter.EventNumber >= targetEvents.back())
             {
-                DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms, h2_integral_z_phi, UserGridXY, WfDir);
-                if (converter.EventNumber >= targetEvents.back())
-                {
-                    break;
-                }
-                if (targetEvent > 0)
-                {
-                    break;
-                }
+                break;
             }
+            if (targetEvent > 0)
+            {
+                break;
+            }
+        }
     }
 
     // Запись последнего ивента со всеми значенями равными 0.
