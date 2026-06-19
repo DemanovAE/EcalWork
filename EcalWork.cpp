@@ -976,11 +976,11 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
     outFile->Close();
 }
 
-// Convert iFile.data to oFile.root without cuts
-void ConvertToRoot(int targetEvent = -1,
-                   std::vector<int> targetEvents = {},
-                   std::string inputData = "../run_rc-hs1_088.data",
-                   std::string outputData = "out2.root")
+//Convert iFile.data to oFile.root without cuts
+void ConvertToRoot( int targetEvent = -1,
+                    std::vector<int> targetEvents={},
+                    std::string inputData = "../run_rc-hs1_088.data",
+                    std::string outputData = "out_all.root")
 {
 
     TStopwatch timer1;
@@ -1089,11 +1089,14 @@ void ConvertToRoot(int targetEvent = -1,
 
         WfDir->cd();
 
-        if (targetEvent > 0 || targetEvents.empty() == false)
-        {
-            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms, h2_integral_z_phi, UserGridXY, WfDir);
-            if (converter.EventNumber >= targetEvents.back())
-            {
+        //if(ChannelDataInEvent.size()>64)
+
+        if(converter.EventNumber>1500 && converter.EventNumber<2000)
+            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
+
+        if(targetEvent > 0 || targetEvents.empty()==false){
+            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
+            if (converter.EventNumber >= targetEvents.back()){
                 break;
             }
             if (targetEvent > 0)
