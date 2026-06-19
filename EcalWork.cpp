@@ -26,9 +26,8 @@
 #include "TF1.h"
 #include "TGraphErrors.h"
 
-
 #if ROOT_VERSION_CODE >= ROOT_VERSION(6, 0, 0)
-R__LOAD_LIBRARY(./build/libMPDDataConverter.so)
+R__LOAD_LIBRARY(./build/libMPDDataConverter.dylib)
 #endif
 
 const int NCHANNELS = 768;
@@ -427,88 +426,52 @@ void FitTargetChannelHistograms(TFile *outFile,
               << outputDirName << std::endl;
 }
 
-// Define what "neighbor" means in (Phi, Z)
-inline bool AreNeighbors(const ChannelData &a, const ChannelData &b,
-                         int maxDeltaPhi = 1, int maxDeltaZ = 1)
-{
-    int dPhi = std::abs(a.channel_Phi - b.channel_Phi);
-    int dZ = std::abs(a.channel_Z - b.channel_Z);
-    return (dPhi <= maxDeltaPhi && dZ <= maxDeltaZ && !(dPhi == 0 && dZ == 0));
-}
-
-// Compute contamination around a given "track cluster"
-// Here all channels are taken in ChannelDataInEvent as "selected",
-// and everything in neighboring cells that is not selected is treated as contamination.
-double ComputeNeighborContamination(const std::vector<ChannelData> &eventHits,
-                                    double &sumSelected,
-                                    double &sumNeighbors,
-                                    int maxDeltaPhi = 1,
-                                    int maxDeltaZ = 1)
+double ComputeStripContamination(const std::vector<ChannelData> &data,
+                                 const std::vector<int> &stripIndices,
+                                 double &sumSelected,
+                                 double &sumNeighbors,
+                                 int maxDeltaPhi = 1,
+                                 int maxDeltaZ = 1)
 {
     sumSelected = 0.0;
     sumNeighbors = 0.0;
 
-    if (eventHits.empty())
+    if (data.empty() || stripIndices.empty())
         return 0.0;
 
-    // First, sum integral in all selected hits ("target + selecting channels").
-    // For now, treat the entire ChannelDataInEvent as the selected cluster.
-    for (const auto &ch : eventHits)
-        sumSelected += static_cast<double>(ch.integral);
-
-    // Now, estimate contamination from neighbors that *should not* belong to the same track.
-    // If later identified a core subset as the track, it can be treated the others differently.
-    const int nHits = static_cast<int>(eventHits.size());
-
-    for (int i = 0; i < nHits; ++i)
+    std::vector<bool> isStrip(data.size(), false);
+    for (int idx : stripIndices)
     {
-        const ChannelData &ci = eventHits[i];
-
-        // For each hit, look at all other hits that are "neighbor" in Phi/Z
-        for (int j = 0; j < nHits; ++j)
+        if (idx >= 0 && idx < (int)data.size())
         {
-            if (i == j)
-                continue;
-
-            const ChannelData &cj = eventHits[j];
-
-            if (AreNeighbors(ci, cj, maxDeltaPhi, maxDeltaZ))
-            {
-                // For a simple implementation, treat neighbor integrals as contamination
-                // if they are not part of a minimal 1D track (e.g. same Phi).
-                // Here: any neighbor with different Phi is "suspicious".
-                if (cj.channel_Phi != ci.channel_Phi)
-                {
-                    sumNeighbors += static_cast<double>(cj.integral);
-                }
-            }
+            isStrip[idx] = true;
+            sumSelected += data[idx].integral;
         }
     }
-
-    // Avoid double counting contamination: it just summed many neighbors multiple times.
-    // A simple fix is to normalize by number of contributing pairs, or better:
-    // recompute sumNeighbors via a unique set. Here is a safer version:
 
     std::set<int> neighborIndices;
-    for (int i = 0; i < nHits; ++i)
+
+    for (int iStrip : stripIndices)
     {
-        const auto &ci = eventHits[i];
-        for (int j = 0; j < nHits; ++j)
+        const auto &ci = data[iStrip];
+
+        for (int j = 0; j < (int)data.size(); ++j)
         {
-            if (i == j)
+            if (isStrip[j])
                 continue;
-            const auto &cj = eventHits[j];
-            if (AreNeighbors(ci, cj, maxDeltaPhi, maxDeltaZ) &&
-                cj.channel_Phi != ci.channel_Phi)
-            {
+
+            const auto &cj = data[j];
+
+            int dPhi = std::abs(ci.channel_Phi - cj.channel_Phi);
+            int dZ = std::abs(ci.channel_Z - cj.channel_Z);
+
+            if (dPhi <= maxDeltaPhi && dZ <= maxDeltaZ)
                 neighborIndices.insert(j);
-            }
         }
     }
 
-    sumNeighbors = 0.0;
     for (int idx : neighborIndices)
-        sumNeighbors += static_cast<double>(eventHits[idx].integral);
+        sumNeighbors += data[idx].integral;
 
     const double denom = sumSelected + sumNeighbors;
     if (denom <= 0.0)
@@ -516,94 +479,327 @@ double ComputeNeighborContamination(const std::vector<ChannelData> &eventHits,
 
     return sumNeighbors / denom;
 }
+// Given all hits in the event (data), check if there exists one phi/Z row that contains
+// at least minLen neighboring Z cells (e.g. Z = 10,11,12,13,14).
+// If yes, return the indices of those hits
+bool FindOneStrip(const std::vector<ChannelData> &data,
+                  std::vector<int> &stripIndices,
+                  bool alongPhi,
+                  int minLen = 5)
+{
+    stripIndices.clear();
 
-bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_int_per_channel, TH1D *hCut)
+    // int outerMax = alongPhi ? 12 : 64;
+    int outerMax = alongPhi ? 12 : 65;
+
+    for (int outer = 1; outer <= outerMax; ++outer) // loop over each phi/Z row
+    {
+        std::vector<std::pair<int, int>> lineHits; // {innerCoord, index in data}
+
+        for (int i = 0; i < (int)data.size(); ++i) // iterate through all hits in the event
+        {
+            int fixedCoord = alongPhi ? data[i].channel_Phi : data[i].channel_Z;
+            int scanCoord = alongPhi ? data[i].channel_Z : data[i].channel_Phi;
+
+            if (fixedCoord == outer) //  If a hit belongs to the current phi/Z row, add {phi/Z, i} to lineHits
+                lineHits.push_back({scanCoord, i});
+        }
+
+        if ((int)lineHits.size() < minLen)
+            continue;
+
+        std::sort(lineHits.begin(), lineHits.end()); // sort the data to get ordered list like { (6, idxA), (8, idxB), (12, idxC), ... }
+
+        std::vector<int> current; // current will store the indices in data of the current run of neighbouring phi/Z cells
+        current.push_back(lineHits[0].second);
+
+        for (int i = 1; i < (int)lineHits.size(); ++i) // looping through the rest of the hits in that row
+        {
+            if (lineHits[i].first == lineHits[i - 1].first + 1) //  ch_current == ch_previous + 1
+            {
+                current.push_back(lineHits[i].second);
+            }
+            else
+            {
+                current.clear();
+                current.push_back(lineHits[i].second);
+            }
+
+            if ((int)current.size() >= minLen)
+            {
+                stripIndices = current;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_per_channel, TH1D *hCut)
 {
     std::vector<int> _PhiCount(12);
     std::vector<int> _ZCount(64);
     std::vector<ChannelData> data;
     data.reserve(eventCh.size());
 
-    for(int i=0; i<eventCh.size();i++){
+    for (int i = 0; i < eventCh.size(); i++)
+    {
 
-        if(eventCh[i].amplitude<100) continue;
+        if (eventCh[i].amplitude < 100)
+            continue; // apm < 100 is a basic selection fro all channels in event
         hCut->Fill(2);
-    
-        if(eventCh[i].integral<500) continue;
+
+        if (eventCh[i].integral < 500)
+            continue; // int < 500 is a basic selection  fro all channels in event
         hCut->Fill(3);
-        
-        data.push_back(eventCh[i]);
-        _PhiCount[eventCh[i].channel_Phi-1]++;
-        _ZCount[eventCh[i].channel_Z-1]++;
+
+        data.push_back(eventCh[i]);              // we have got the 'target' channels in event
+        _PhiCount[eventCh[i].channel_Phi - 1]++; // count the number of phi triggered cells in event
+        _ZCount[eventCh[i].channel_Z - 1]++;     // count the number of Z triggered cells in event
     }
-    
-    if(data.size()<5){
+
+    if (data.size() < 5)
+    { // if there are less tna five channels (doesn't matter which ones), then reject the event
         eventCh.clear();
         return false;
     }
-    hCut->Fill(4,data.size());
+    hCut->Fill(4, data.size());
 
+    // This ones only check the number of triggered channels in row
+    //--->
+    /*
     int max_PhiCount = *std::max_element(_PhiCount.begin(), _PhiCount.end());
     int max_ZCount = *std::max_element(_ZCount.begin(), _ZCount.end());
-    if (max_PhiCount < 5 && max_ZCount < 5) return false;
+    if (max_PhiCount < 5 && max_ZCount < 5) return false; //check if there a less than five channels in phi/Z row
+    */
+    //<---
+    // Add the neighbors check here ---> poop from below
+    // /*
+    std::vector<int> phiStrip, zStrip, stripIndices;
 
-    //if(data[0].eventNum<120)eventCh.back().Print();
+    bool hasPhiStrip = FindOneStrip(data, phiStrip, true, 5);
+    bool hasZStrip = FindOneStrip(data, zStrip, false, 5);
 
+    if (!hasPhiStrip && !hasZStrip)
+        return false;
 
-    hCut->Fill(5,data.size());
+    if (hasPhiStrip && hasZStrip)
+        stripIndices = (phiStrip.size() >= zStrip.size()) ? phiStrip : zStrip;
+    else if (hasPhiStrip)
+        stripIndices = phiStrip;
+    else
+        stripIndices = zStrip;
+    // */
+    // if(data[0].eventNum<120)eventCh.back().Print();
+    hCut->Fill(5, data.size());
 
-    // User-configurable threshold_3 (e.g. 0.20 = 20%)
-    const double threshold_3 = 0.10;
+    //  User-configurable threshold_3 (e.g. 0.20 = 20%)
+    const double threshold_3 = 0.20;
 
+    // /*
     // --- New 4.3: contamination check from neighboring channels ---
     double sumSelected = 0.0;
     double sumNeighbors = 0.0;
-
-    // For now, treat all hits in ChannelDataInEvent as "target + selecting channels"
-    double contamination = ComputeNeighborContamination(data,
-                                                        sumSelected,
-                                                        sumNeighbors,
-                                                        /*maxDeltaPhi=*/1,
-                                                        /*maxDeltaZ=*/1);
-
-    if (contamination > threshold_3){
+    double contamination = ComputeStripContamination(data,
+                                                     stripIndices,
+                                                     sumSelected,
+                                                     sumNeighbors,
+                                                     1, 1);
+    if (contamination > threshold_3)
+    {
         // Reject this event as multi-muon (or heavily contaminated) in neighboring cells
         eventCh.clear();
         return false;
     }
+    // */
+    hCut->Fill(6, data.size());
 
-    hCut->Fill(6,data.size());
-
-    for (int i = 0; i < data.size(); i++){
+    for (int i = 0; i < data.size(); i++)
+    {
         int ch = data[i].channelNums;
-        if (ch >= 1 && ch <= NCHANNELS){
+        if (ch >= 1 && ch <= NCHANNELS)
+        {
             h_int_per_channel[ch - 1]->Fill(data[i].integral);
         }
     }
+
+
+    // for (int i = 0; i < stripIndices.size(); i++)
+    // {
+    //     int ch = data[stripIndices[i]].channelNums;
+    //     if (ch >= 1 && ch <= NCHANNELS)
+    //     {
+    //         h_int_per_channel[ch - 1]->Fill(data[stripIndices[i]].integral);
+    //     }
+    // }
+
     eventCh.clear();
-    eventCh=std::move(data);
+    eventCh = std::move(data);
 
     return true;
 }
 
+// Selection 3x3 Neighbourhood window
+// Finding the second strongest cell
+bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data, ChannelData hottestCell, float &adc_max_2)
+{
+    adc_max_2 = -1;
+    float adc_max = hottestCell.integral;
+    int phi_0 = hottestCell.channel_Phi;
+    int z_0 = hottestCell.channel_Z;
+
+    float min_ratio = 0.70; // dummy value
+    float max_ratio = 0.95; // dummy value
+
+    for (int phi = phi_0 - 1; phi <= phi_0 + 1; ++phi)
+    {
+        for (int z = z_0 - 1; z <= z_0 + 1; ++z)
+        {
+
+            // Skip the center cell itself
+            if (phi == phi_0 && z == z_0)
+                continue;
+
+            // Search for any channel with these indices in this event
+            for (const auto &ch : data)
+            {
+                if (ch.channel_Phi == phi && ch.channel_Z == z)
+                {
+                    if (ch.integral > adc_max_2)
+                        adc_max_2 = ch.integral;
+                }
+            }
+        }
+    }
+
+    float signifOfMax = adc_max / (adc_max + adc_max_2);
+    if (signifOfMax > max_ratio || signifOfMax < min_ratio)
+        return false;
+
+    return true;
+}
+
+bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
+                              const ChannelData &hottestCell,
+                              float &sum5x5,
+                              float &sum3x3,
+                              float &ratio_cut5x5)
+{
+    sum5x5 = 0.0f;
+    sum3x3 = 0.0f;
+    ratio_cut5x5 = -1.0f;
+
+    int phi_0 = hottestCell.channel_Phi;
+    int z_0 = hottestCell.channel_Z;
+
+    for (const auto &ch : data)
+    {
+        int dPhi = std::abs(ch.channel_Phi - phi_0);
+        int dZ = std::abs(ch.channel_Z - z_0);
+
+        // inside 5x5 window
+        if (dPhi == 2 && dZ == 2){
+            sum5x5 += ch.integral;
+        }
+        // inside 5x5 window
+        if (dPhi == 1 && dZ == 1){
+            sum3x3 += ch.integral;
+        }
+    }
 
 
 
-bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F*> h_int_per_channel, TH1D *hCut)
+    if (sum5x5 <= 0.0f)
+        return false;
+
+    // energy fraction outside the compact 3x3 core
+    ratio_cut5x5 = (sum5x5 - sum3x3) / sum5x5;
+
+    float max_diffusivity = 0.2f; // dummy value, tune from data
+    if (ratio_cut5x5 > max_diffusivity)
+        return false;
+
+    return true;
+}
+bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_per_channel, TH1D *hCut)
 {
     std::vector<ChannelData> data;
     data.reserve(eventCh.size());
 
-    for(int i=0; i<eventCh.size();i++){
-        if(eventCh[i].amplitude<100) continue;
+    for (int i = 0; i < eventCh.size(); i++)
+    {
+        if (eventCh[i].amplitude < 100)
+            continue;
         hCut->Fill(2);
+        if (eventCh[i].integral < 500)
+            continue; // int < 500 is a basic selection  fro all channels in event
+        hCut->Fill(3);
+
         data.push_back(eventCh[i]);
     }
-    
 
+    if (data.empty())
+        return false; // nothing passed cuts, no maximum
 
+    // find element with maximum integral
+    // maximum by amplitude
+    auto itMax = std::max_element(
+        data.begin(), data.end(),
+        [](const ChannelData &a, const ChannelData &b)
+        {
+            return a.integral < b.integral;
+        });
+
+    if (itMax == eventCh.end())
+        return false;
+
+    const ChannelData &maxCell = *itMax;
+    float adc_max = maxCell.integral;
+    // float adc_max_2 = -1;
+    float adc_max_2;
+
+    //int maxThreshold = 1000; // dummy value
+    //int secondNoise = 50;    // dummy value
+
+    float ration3on3 = 0;
+
+    // 2. Reject if hottest cell is too small
+    // if (adc_max < maxThreshold)
+    //     return false;
+    hCut->Fill(4,data.size());
+
+    if (!CheckThreeOnThreeWindow(data, maxCell, adc_max_2))
+        return false;
+    hCut->Fill(5,data.size());
+
+    if (adc_max_2 < 500)
+        return false;
+    hCut->Fill(6,data.size());
+
+    float sum5x5, sum3x3, ratio_cut5x5;
+
+    if(!CalcAreaFiveOnFiveWindow(data, maxCell, sum5x5, sum3x3, ratio_cut5x5)) 
+        return false;
+
+    hCut->Fill(7,data.size());
+
+    for (int i = 0; i < data.size(); i++)
+    {
+        int ch = data[i].channelNums;
+        if (ch >= 1 && ch <= NCHANNELS)
+        {
+            int phi_0 = maxCell.channel_Phi;
+            int z_0 = maxCell.channel_Z;
+            if(abs(phi_0-data[i].channel_Phi)<=1 && abs(z_0-data[i].channel_Z)<=1 ){
+                h_int_per_channel[ch - 1]->Fill(data[i].integral);
+                }    
+            }
+    }
+
+    // std::cout << "Approx deposed energy = " << adc_max_2+adc_max  << "[ADC?]" <<std::endl;
     eventCh.clear();
-    eventCh=std::move(data);
+    eventCh = std::move(data);
 
     return true;
 }
@@ -626,7 +822,7 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
                      100, 0, 15000));
     }
 
-    TFile *outFile = new TFile(Form("%s",outputData.c_str()),"RECREATE");
+    TFile *outFile = new TFile(Form("%s", outputData.c_str()), "RECREATE");
 
     TFile *iFile = TFile::Open(inputDataTree.c_str());
     TTreeReader reader("events", iFile);
@@ -638,16 +834,17 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
     TTreeReaderValue<unsigned short> chZ(reader, "channel_Z");
     TTreeReaderValue<unsigned short> chPhi(reader, "channel_Phi");
 
-    TH1D *h1_evNum = new TH1D("event_number",";event;count",2.0e6,0,2.0e6);
-    TH1D *h1_chNum = new TH1D("channel_number",";Num;count",NCHANNELS,0.5,(Float_t)NCHANNELS+0.5);
-    TH1D *h1_chZ = new TH1D("channel_Z",";Z;count",64,0.5,64.5);
-    TH1D *h1_chPhi = new TH1D("channel_Phi",";Phi;count",12,0.5,12.5);
-    TH1D *h1_chAmp = new TH1D("channel_amplitude",";Amp;count",100,0,10000);
-    TH1D *h1_chInt = new TH1D("channel_integral",";Amp;count",300,0,15000);
+    TH1D *h1_evNum = new TH1D("event_number", ";event;count", 2.0e6, 0, 2.0e6);
+    TH1D *h1_chNum = new TH1D("channel_number", ";Num;count", NCHANNELS, 0.5, (Float_t)NCHANNELS + 0.5);
+    TH1D *h1_chZ = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
+    TH1D *h1_chPhi = new TH1D("channel_Phi", ";Phi;count", 12, 0.5, 12.5);
+    TH1D *h1_chAmp = new TH1D("channel_amplitude", ";Amp;count", 100, 0, 10000);
+    TH1D *h1_chInt = new TH1D("channel_integral", ";Amp;count", 300, 0, 15000);
 
     std::filesystem::path outRootPath(outputData);
     std::filesystem::path outDir = outRootPath.parent_path();
-    if (outDir.empty()) {
+    if (outDir.empty())
+    {
         outDir = ".";
     }
     std::filesystem::path pictDir = outDir / "pict";
@@ -657,15 +854,16 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
 
     TDirectory *WfDir = outFile->mkdir("channel_wf");
     WfDir->cd();
-    
+
     UInt_t currentEventNum = 0;
     bool hasData = false;
     std::vector<ChannelData> ChannelDataInEvent;
     ChannelDataInEvent.reserve(NCHANNELS);
 
-    TH1D *h_CountCut = new TH1D("hCountCut","Number of events after applying cut;;count",20,-0.5,19.5);
+    TH1D *h_CountCut = new TH1D("hCountCut", "Number of events after applying cut;;count", 20, -0.5, 19.5);
 
-    while (reader.Next()) {
+    while (reader.Next())
+    {
         ChannelData data;
         data.eventNum = *eventNumber;
         data.integral = *chInt;
@@ -673,25 +871,34 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
         data.channelNums = *chNum;
         data.channel_Z = *chZ;
         data.channel_Phi = *chPhi;
-        
+
         h_CountCut->Fill(0.);
 
-        //Проверка на конец дерева
-        if (data.eventNum == 0) {
+        // Проверка на конец дерева
+        if (data.eventNum == 0)
+        {
             data.eventNum = currentEventNum + 1; // Новый номер, чтобы вызвать обработку
         }
-        
-        if (!hasData) {
+
+        if (!hasData)
+        {
             currentEventNum = data.eventNum;
             hasData = true;
-        } else if (data.eventNum != currentEventNum) { // Тут все действия с одним событием и каналами сработавшими в событии
-            if(ChannelDataInEvent.size()<=2*MAX_CH)
+        }
+        else if (data.eventNum != currentEventNum)
+        { // Тут все действия с одним событием и каналами сработавшими в событии
+            if (ChannelDataInEvent.size() <= MAX_CH)
             {
-                h_CountCut->Fill(1,ChannelDataInEvent.size());
-                
-                if(TransverAnalysis){
-                    if(TransverseAnalysis(ChannelDataInEvent,h_int_per_channel,h_CountCut) ){
-                        for(int i=0; i<ChannelDataInEvent.size();i++){
+                h_CountCut->Fill(1, ChannelDataInEvent.size());
+
+                if (TransverAnalysis)
+                {
+                    // std::cout << "Roflan pominki ... " << std::endl;
+
+                    if (TransverseAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut))
+                    {
+                        for (int i = 0; i < ChannelDataInEvent.size(); i++)
+                        {
                             h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
                             h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
                             h1_chInt->Fill(ChannelDataInEvent[i].integral);
@@ -700,9 +907,13 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
                             h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
                         }
                     }
-                }else{
-                    if(LongAnalysis(ChannelDataInEvent,h_int_per_channel,h_CountCut) ){
-                        for(int i=0; i<ChannelDataInEvent.size();i++){
+                }
+                else
+                {
+                    if (LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut))
+                    {
+                        for (int i = 0; i < ChannelDataInEvent.size(); i++)
+                        {
                             h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
                             h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
                             h1_chInt->Fill(ChannelDataInEvent[i].integral);
@@ -716,9 +927,10 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
             ChannelDataInEvent.clear();
             currentEventNum = data.eventNum;
         } // конец магии над событием
-        
+
         // Если это была сторожевая запись - выходим (не добавляем её)
-        if (*eventNumber == 0) {
+        if (*eventNumber == 0)
+        {
             break;
         }
 
@@ -733,7 +945,7 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
     h1_chNum->Write();
     h1_chPhi->Write();
     h1_chZ->Write();
-    
+
     // Create (or get) subdirectory for target-channel histograms
     TDirectory *dirTargets = nullptr;
     if (!(dirTargets = (TDirectory *)outFile->Get("target_channels")))
@@ -756,10 +968,12 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
     FitTargetChannelHistograms(outFile);
 
     // ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
-    std::cout << "\n\nOutput saved to: " << outputData << "\n\n"<< std::endl;
+    std::cout << "\n\nOutput saved to: " << outputData << "\n\n"
+              << std::endl;
 
     timer1.Stop();
     timer1.Print();
+    outFile->Close();
 }
 
 //Convert iFile.data to oFile.root without cuts
@@ -787,12 +1001,13 @@ void ConvertToRoot( int targetEvent = -1,
     converter.OpenOutRootFile(outputData);
     // converter.WriteChannelSamplesVector();
     converter.SetTypeWaveForms(TypeWaveForms::invert);
-    converter.SetPedestalPar(/*pedestal_Skip*/2, /*pedestal_count*/10); // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
+    converter.SetPedestalPar(/*pedestal_Skip*/ 2, /*pedestal_count*/ 10); // Число первых бинов для пропуска и число последующих бинов для подсчета подложки
     converter.InitTree();
 
     std::filesystem::path outRootPath(outputData);
     std::filesystem::path outDir = outRootPath.parent_path();
-    if (outDir.empty()) {
+    if (outDir.empty())
+    {
         outDir = ".";
     }
     std::filesystem::path pictDir = outDir / "pict";
@@ -822,10 +1037,12 @@ void ConvertToRoot( int targetEvent = -1,
     h2_integral_z_phi->SetBit(TH1::kNoStats);
 
     std::vector<TLine *> UserGridXY;
-    for (int j = 1; j <= 12; j++){
+    for (int j = 1; j <= 12; j++)
+    {
         UserGridXY.push_back(new TLine(0.5, j + 0.5, 64.5, j + 0.5));
     }
-    for (int i = 1; i <= 64; i++){
+    for (int i = 1; i <= 64; i++)
+    {
         UserGridXY.push_back(new TLine(i + 0.5, 0.5, i + 0.5, 12.5));
     }
 
@@ -836,12 +1053,15 @@ void ConvertToRoot( int targetEvent = -1,
     while (converter.ReadEvent())
     {
 
-        if (targetEvent > 0 && converter.EventNumber != (uint32_t)targetEvent){
+        if (targetEvent > 0 && converter.EventNumber != (uint32_t)targetEvent)
+        {
             continue;
         }
 
-        if (!targetEvents.empty()){
-            if(std::find(targetEvents.begin(), targetEvents.end(), (uint32_t)targetEvent) != targetEvents.end()){
+        if (!targetEvents.empty())
+        {
+            if (std::find(targetEvents.begin(), targetEvents.end(), (uint32_t)targetEvent) != targetEvents.end())
+            {
                 continue;
             }
         }
@@ -879,19 +1099,21 @@ void ConvertToRoot( int targetEvent = -1,
             if (converter.EventNumber >= targetEvents.back()){
                 break;
             }
-            if(targetEvent>0){
+            if (targetEvent > 0)
+            {
                 break;
             }
         }
     }
 
-    //Запись последнего ивента со всеми значенями равными 0.
+    // Запись последнего ивента со всеми значенями равными 0.
     converter.channelEvent.Clear();
     converter.FillTreeData();
 
     converter.outFile->cd();
 
-    std::cout << "\nOutput Tree saved to: " << outputData << "\n"<< std::endl;
+    std::cout << "\nOutput Tree saved to: " << outputData << "\n"
+              << std::endl;
 
     converter.WriteTreeAndClose();
 
