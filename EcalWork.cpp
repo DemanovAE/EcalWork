@@ -27,7 +27,11 @@
 #include "TGraphErrors.h"
 
 #if ROOT_VERSION_CODE >= ROOT_VERSION(6, 0, 0)
-R__LOAD_LIBRARY(./build/libMPDDataConverter.dylib)
+    #ifdef __APPLE__
+        R__LOAD_LIBRARY(./build/libMPDDataConverter.dylib)
+    #else
+        R__LOAD_LIBRARY(./build/libMPDDataConverter.so)
+    #endif
 #endif
 
 const int NCHANNELS = 768;
