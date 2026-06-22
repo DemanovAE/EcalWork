@@ -6,9 +6,23 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include "RtypesCore.h"
-#include "TH1.h"
 #include <algorithm>
+
+#include "Rtypes.h"
+#include "RtypesCore.h"
+#include "TFile.h"
+#include "TGraph.h"
+#include "TH1.h"
+#include "TH2.h"
+#include "TMathBase.h"
+#include "TStopwatch.h"
+#include "TCanvas.h"
+#include "TLegend.h"
+#include "TLine.h"
+#include "TTreeReader.h"
+#include "TSystem.h"
+#include "TF1.h"
+#include "TGraphErrors.h"
 
 class TFile;
 class TTree;

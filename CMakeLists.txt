@@ -13,6 +13,7 @@ find_package(ROOT REQUIRED)
 # Создаем динамическую библиотеку
 add_library(MPDDataConverter SHARED
     MpdDataConverter.cpp
+    EcalDrawClass.cpp
 )
 
 # Подключаем ROOT

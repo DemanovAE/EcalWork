@@ -1,3 +1,4 @@
+#include "EcalDrawClass.h"
 #include "MpdDataConverter.h"
 #include <algorithm>
 #include <cstddef>
@@ -68,149 +69,6 @@ void SetWaveformHistogram(
     hist->SetLineWidth(2);
     hist->SetDrawOption("L");
     hist->SetBit(TH1::kNoStats);
-}
-
-void DrawAllWaveformsOnOneCanvas(std::vector<ChannelData> _ChData,
-                                 std::vector<TH1F *> &histograms,
-                                 TH2D *h2_histo,
-                                 std::vector<TLine *> &_userGrid,
-                                 TDirectory *eventDir)
-{
-
-    if (_ChData.empty())
-        return;
-
-    int eventNumber = _ChData[0].eventNum;
-
-    std::vector<Float_t> axis_y_min;
-    std::vector<Float_t> axis_y_max;
-
-    for (size_t i = 0; i < _ChData.size(); i++)
-    {
-        int chNum = _ChData[i].channelNums;
-        int chPhi = _ChData[i].channel_Phi;
-        int chZ = _ChData[i].channel_Z;
-        int chInt = _ChData[i].integral;
-        std::string h_name = Form("h_ev_%i_ch_%i_phi_%i_z_%i", eventNumber, chNum, chPhi, chZ);
-        std::string h_title = Form("Basket 38, Event %i, channel %i, Phi %i, Z %i", eventNumber, chNum, chPhi, chZ);
-
-        SetWaveformHistogram(_ChData[i].adcValues, histograms[chNum - 1], h_name, h_title);
-
-        h2_histo->SetBinContent(h2_histo->FindBin(chZ, chPhi), chInt);
-
-        axis_y_max.push_back(histograms[chNum - 1]->GetMaximum());
-        axis_y_min.push_back(histograms[chNum - 1]->GetMinimum());
-    }
-
-    Float_t AxisYmax = *std::max_element(axis_y_max.begin(), axis_y_max.end());
-    Float_t AxisYmin = *std::min_element(axis_y_min.begin(), axis_y_min.end());
-
-    TCanvas *canvas = new TCanvas(Form("wf_event_%d", eventNumber), Form("Event %d - All Waveforms Overlay", eventNumber), 3 * 720, 2 * 720);
-
-    TPad *topPad = new TPad("topPad", "Top Pad", 0, 0.35, 1, 1);
-    TPad *bottomPad = new TPad("bottomPad", "Bottom Pad", 0, 0, 1, 0.35);
-
-    topPad->SetFillColor(0);
-    topPad->SetFrameFillColor(0);
-
-    bottomPad->SetFillColor(0);
-    bottomPad->SetFrameFillColor(0);
-    bottomPad->SetTopMargin(0);
-    bottomPad->SetBottomMargin(0.2);
-
-    canvas->cd();
-    topPad->Draw();
-    bottomPad->Draw();
-
-    std::vector<int> colors = {kRed, kBlue, kGreen, kMagenta, kCyan, kYellow,
-                               kTeal, kPink, kViolet, kSpring, kAzure, kOrange};
-    std::vector<int> colorTone = {-2, -1, 0, 1, 2, 3};
-    std::vector<int> LineColor;
-
-    LineColor.reserve(colors.size() * colorTone.size());
-    for (int i = 0; i < colorTone.size(); i++)
-    {
-        for (int j = 0; j < colors.size(); j++)
-        {
-            LineColor.push_back(colors[j] + colorTone[i]);
-        }
-    }
-
-    TH2F *AxisHisto = new TH2F(Form("h_axis_%i", eventNumber), "",
-                               2, 0, 60, 2, AxisYmin - 0.1 * TMath::Abs(AxisYmin - AxisYmax), AxisYmax + 0.1 * TMath::Abs(AxisYmin - AxisYmax));
-    AxisHisto->SetLineColor(colors[0 % colors.size()]);
-    AxisHisto->SetBit(TH1::kNoStats);
-    AxisHisto->SetLineWidth(2);
-    topPad->cd();
-    AxisHisto->Draw();
-
-    AxisHisto->GetXaxis()->SetTitle("Sample Number");
-    AxisHisto->GetYaxis()->SetTitle("ADC Value");
-    AxisHisto->SetTitle(Form("Event %d - All %d Channels", eventNumber, (int)_ChData.size()));
-
-    TLegend *legend = new TLegend(0.91, 0.1, 1.0, 0.9);
-    legend->SetBorderSize(0);
-    legend->SetNColumns(2);
-    legend->SetFillStyle(1001);
-
-    for (size_t i = 0; i < _ChData.size(); i++)
-    {
-        int iCh = _ChData[i].channelNums - 1;
-        if (histograms[iCh]->GetEntries() < 1)
-            continue;
-        // histograms[iCh]->SetLineColor(colors[i % colors.size()]);
-        histograms[iCh]->SetLineColor(LineColor[(iCh + 1) % 64]);
-        histograms[iCh]->SetLineWidth(2);
-        histograms[iCh]->Draw("L same");
-        std::string legendEntry = Form("%i", _ChData[i].channelNums);
-        legend->AddEntry(histograms[iCh], legendEntry.c_str(), "l");
-    }
-
-    legend->Draw("same");
-
-    bottomPad->cd();
-    // h2_histo->GetXaxis()->SetTitleOffset(AxisHisto->GetXaxis()->GetTitleOffset());
-    h2_histo->GetXaxis()->SetTitleSize(2 * AxisHisto->GetXaxis()->GetTitleSize());
-    h2_histo->GetXaxis()->SetLabelSize(2 * AxisHisto->GetXaxis()->GetLabelSize());
-    h2_histo->GetYaxis()->SetTitleSize(2 * AxisHisto->GetYaxis()->GetTitleSize());
-    h2_histo->GetYaxis()->SetLabelSize(2 * AxisHisto->GetYaxis()->GetLabelSize());
-    h2_histo->GetYaxis()->SetTitleOffset(0.4);
-    h2_histo->GetYaxis()->SetTickSize(0.005);
-    // h2_histo->GetXaxis()->SetTitleSize(0.5);
-    h2_histo->Draw("COLZ");
-
-    for (int i = 0; i < _userGrid.size(); i++)
-    {
-        _userGrid[i]->SetLineColor(kBlack);
-        _userGrid[i]->SetLineStyle(2);
-        _userGrid[i]->SetLineWidth(1);
-        _userGrid[i]->Draw("same");
-    }
-
-    bottomPad->Modified();
-    bottomPad->Update();
-
-    eventDir->cd();
-
-    // canvas->Write();
-    //  canvas->SaveAs(Form("/home/aleksandr/ecal_work/pict/%s.png",canvas->GetName()));
-    canvas->SaveAs(Form("pict_%s.png", canvas->GetName()));
-
-    for (size_t i = 0; i < _ChData.size(); i++)
-    {
-        int chNum = _ChData[i].channelNums;
-        histograms[chNum - 1]->Reset();
-    }
-
-    h2_histo->Reset();
-
-    delete canvas;
-    delete legend;
-    delete AxisHisto;
-
-    canvas = nullptr;
-    legend = nullptr;
-    AxisHisto = nullptr;
 }
 
 void SetChannelIntegralAmp(ChannelData &_chData, TH1F *hist, int binStart, int binEnd, int nBinLeft, int nBinRight)
@@ -628,7 +486,13 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h
         }
     }
 
-
+    if(data[0].eventNum>1700 && data[0].eventNum<2000){
+        EcalDrawClass drawObj;
+        drawObj.InitCanvas1Pad();
+        drawObj.UpdateAndSaveCanvas("",data);    
+        drawObj.UpdateAndSaveCanvas("_cut",data,stripIndices);    
+    }
+    
     // for (int i = 0; i < stripIndices.size(); i++)
     // {
     //     int ch = data[stripIndices[i]].channelNums;
@@ -808,13 +672,13 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh, std::vector<TH1F *> h_int_p
     return true;
 }
 
-void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = "long_x_38.root")
+void EcalWork(std::string inputDataTree = "out_all.root", std::string outputData = "tran_x_38.root")
 {
 
     TStopwatch timer1;
     timer1.Start();
 
-    bool TransverAnalysis = false;
+    bool TransverAnalysis = true;
 
     std::vector<TH1F *> h_int_per_channel;
     h_int_per_channel.reserve(NCHANNELS);
@@ -894,37 +758,25 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
             if (ChannelDataInEvent.size() <= MAX_CH)
             {
                 h_CountCut->Fill(1, ChannelDataInEvent.size());
+                
+                bool KeyChData = false;
 
-                if (TransverAnalysis)
-                {
-                    // std::cout << "Roflan pominki ... " << std::endl;
-
-                    if (TransverseAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut))
-                    {
-                        for (int i = 0; i < ChannelDataInEvent.size(); i++)
-                        {
-                            h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
-                            h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
-                            h1_chInt->Fill(ChannelDataInEvent[i].integral);
-                            h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
-                            h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
-                            h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
-                        }
-                    }
+                if (TransverAnalysis){
+                    KeyChData = TransverseAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
                 }
-                else
-                {
-                    if (LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut))
+                else{
+                    KeyChData = LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+                }
+
+                if(KeyChData==true){
+                    for (int i = 0; i < ChannelDataInEvent.size(); i++)
                     {
-                        for (int i = 0; i < ChannelDataInEvent.size(); i++)
-                        {
-                            h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
-                            h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
-                            h1_chInt->Fill(ChannelDataInEvent[i].integral);
-                            h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
-                            h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
-                            h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
-                        }
+                        h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+                        h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+                        h1_chInt->Fill(ChannelDataInEvent[i].integral);
+                        h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+                        h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+                        h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
                     }
                 }
             }
@@ -933,8 +785,7 @@ void EcalWork(std::string inputDataTree = "out2.root", std::string outputData = 
         } // конец магии над событием
 
         // Если это была сторожевая запись - выходим (не добавляем её)
-        if (*eventNumber == 0)
-        {
+        if (*eventNumber == 0){
             break;
         }
 
@@ -1025,33 +876,14 @@ void ConvertToRoot( int targetEvent = -1,
 
     TH1F *h1_wf = new TH1F("hist", "", nBinsSamples, SamplesMin, SamplesMax);
 
-    std::vector<TH1F *> eventHistograms;
-    eventHistograms.reserve(NCHANNELS);
-    for (int i = 0; i < NCHANNELS; i++)
-    {
-        eventHistograms.push_back(new TH1F(Form("histo_%i", i), "", nBinsSamples, SamplesMin, SamplesMax));
-    }
-
     std::vector<ChannelData> ChannelDataInEvent;
     ChannelDataInEvent.reserve(NCHANNELS);
 
-    TH2D *h2_integral_z_phi = new TH2D("h2", ";Z;Phi", 64, 0.5, 64.5, 12, 0.5, 12.5);
-    h2_integral_z_phi->GetXaxis()->SetNdivisions(13, 5, kTRUE);
-    h2_integral_z_phi->GetYaxis()->SetNdivisions(12, 0, kTRUE);
-    h2_integral_z_phi->SetBit(TH1::kNoStats);
-
-    std::vector<TLine *> UserGridXY;
-    for (int j = 1; j <= 12; j++)
-    {
-        UserGridXY.push_back(new TLine(0.5, j + 0.5, 64.5, j + 0.5));
-    }
-    for (int i = 1; i <= 64; i++)
-    {
-        UserGridXY.push_back(new TLine(i + 0.5, 0.5, i + 0.5, 12.5));
-    }
-
     TDirectory *WfDir = converter.outFile->mkdir("channel_wf");
     WfDir->cd();
+
+    EcalDrawClass drawObj;
+    drawObj.InitCanvas2Pad(100);
 
     // while (converter.ReadEvent() && converter.EventNumber<1000){
     while (converter.ReadEvent())
@@ -1093,15 +925,14 @@ void ConvertToRoot( int targetEvent = -1,
 
         WfDir->cd();
 
-        //if(ChannelDataInEvent.size()>64)
-
-        if(converter.EventNumber>1500 && converter.EventNumber<2000)
-            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
+        if(converter.EventNumber>1700 && converter.EventNumber<2000)
+            drawObj.UpdateAndSaveCanvas("",ChannelDataInEvent);
 
         if(targetEvent > 0 || targetEvents.empty()==false){
-            DrawAllWaveformsOnOneCanvas(ChannelDataInEvent, eventHistograms,h2_integral_z_phi, UserGridXY, WfDir);
-            if (converter.EventNumber >= targetEvents.back()){
-                break;
+            if (!targetEvents.empty()){
+                if (converter.EventNumber >= targetEvents.back()){
+                    break;
+                }
             }
             if (targetEvent > 0)
             {
