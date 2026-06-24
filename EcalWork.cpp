@@ -352,21 +352,35 @@ bool FindOneStrip(const std::vector<ChannelData> &data,
       continue;
 
     int runLen = 1;
+    int bestRunLen = 0;
+    int bestRunStart = 0;
+
     for (int i = 1; i < (int)acceptedCells.size(); ++i) {
       if (acceptedCells[i] == acceptedCells[i - 1] + 1) {
         ++runLen;
       } else {
         runLen = 1;
       }
-
-      if (runLen >= minLen) {
-        int runStart = i - runLen + 1;
-        stripIndices.clear();
-        for (int k = 0; k < runLen; ++k)
-          stripIndices.push_back(acceptedCells[runStart + k]);
-        foundOuter = outer; // ← запоминаем при каком phi/Z нашли
-        return true;
+      if (runLen > bestRunLen) {
+        bestRunLen = runLen;
+        bestRunStart = i - runLen + 1;
       }
+    }
+      // if (runLen >= minLen) {
+      //   int runStart = i - runLen + 1;
+      //   stripIndices.clear();
+      //   for (int k = 0; k < runLen; ++k)
+      //     stripIndices.push_back(acceptedCells[runStart + k]);
+      //   foundOuter = outer; // ← запоминаем при каком phi/Z нашли
+      //   return true;
+      // }
+      if (bestRunLen >= minLen) {
+        stripIndices.clear();
+        for (int k = 0; k < bestRunLen; ++k)
+          stripIndices.push_back(acceptedCells[bestRunStart + k]);
+        foundOuter = outer;
+        return true;
+      // }
     }
   }
   return false;
@@ -508,7 +522,7 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
   }
 
   if (data[0].eventNum > 1700 && data[0].eventNum < 2000) {
-  // if (data[0].eventNum > 1700 && data[0].eventNum < 1800) {
+    // if (data[0].eventNum > 1700 && data[0].eventNum < 1800) {
 
     EcalDrawClass drawObj;
     drawObj.InitCanvas1Pad();
