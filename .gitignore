@@ -1,7 +1,6 @@
 build/
 pict/
-all_pict/
-
+*pict*/
 log*.txt
 .DS_Store
 *.root

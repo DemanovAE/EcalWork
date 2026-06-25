@@ -366,58 +366,17 @@ bool FindOneStrip(const std::vector<ChannelData> &data,
         bestRunStart = i - runLen + 1;
       }
     }
-      // if (runLen >= minLen) {
-      //   int runStart = i - runLen + 1;
-      //   stripIndices.clear();
-      //   for (int k = 0; k < runLen; ++k)
-      //     stripIndices.push_back(acceptedCells[runStart + k]);
-      //   foundOuter = outer; // ← запоминаем при каком phi/Z нашли
-      //   return true;
-      // }
-      if (bestRunLen >= minLen) {
-        stripIndices.clear();
-        for (int k = 0; k < bestRunLen; ++k)
-          stripIndices.push_back(acceptedCells[bestRunStart + k]);
-        foundOuter = outer;
-        return true;
+    if (bestRunLen >= minLen) {
+      stripIndices.clear();
+      for (int k = 0; k < bestRunLen; ++k)
+        stripIndices.push_back(acceptedCells[bestRunStart + k]);
+      foundOuter = outer;
+      return true;
       // }
     }
   }
   return false;
 }
-// --- Analysis & Helper Functions ---
-// Checks neighborness: Ratio of filled 8-way neighbors to total possible
-// neighbors
-// double getNeighborContamination(int start_r, int start_c, int len,
-//                                 bool is_z_dir,
-//                                 std::vector<std::vector<int>> &field) {
-//   int filled = 0, total = 0;
-
-//   int min_r = is_z_dir ? start_r - 1 : start_r - 1;
-//   int max_r = is_z_dir ? start_r + 1 : start_r + len;
-//   int min_c = is_z_dir ? start_c - 1 : start_c - 1;
-//   int max_c = is_z_dir ? start_c + len : start_c + 1;
-
-//   for (int r = min_r; r <= max_r; ++r) {
-//     for (int c = min_c; c <= max_c; ++c) {
-//       // Check bounds
-//       if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
-//         // Exclude the track's own cells
-//         bool is_track_cell =
-//             is_z_dir ? (r == start_r && c >= start_c && c < start_c + len)
-//                      : (c == start_c && r >= start_r && r < start_r + len);
-//         if (!is_track_cell) {
-//           total++;
-//           if (field[r][c] >= 100)
-//             filled++;
-//         }
-//       }
-//     }
-//   }
-//   return total == 0 ? 0.0 : ((double)filled / total) * 100.0;
-// }
-
-// "4 total side neighbors" around strip ends:
 
 bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
                         std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
@@ -602,19 +561,22 @@ bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
     if (dPhi == 2 && dZ == 2) {
       sum5x5 += ch.integral;
     }
-    // inside 5x5 window
+    // inside 3x3 window
     if (dPhi == 1 && dZ == 1) {
       sum3x3 += ch.integral;
     }
   }
-
   if (sum5x5 <= 0.0f)
     return false;
 
+  sum3x3 = sum3x3 + hottestCell.integral;
   // energy fraction outside the compact 3x3 core
-  ratio_cut5x5 = (sum5x5 - sum3x3) / sum5x5;
+  // ratio_cut5x5 = (sum5x5 - sum3x3) / sum5x5;
+  ratio_cut5x5 = sum5x5 / (sum3x3+sum5x5);
+  //std::cout << "5x5: " << sum5x5 << " 3x3: " << sum3x3 << " hot: " << hottestCell.integral << " r: " << ratio_cut5x5 << std::endl;
 
-  float max_diffusivity = 0.2f; // dummy value, tune from data
+
+  float max_diffusivity = 0.5f; // dummy value, tune from data
   if (ratio_cut5x5 > max_diffusivity)
     return false;
 
@@ -690,7 +652,12 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
       }
     }
   }
+  if (data[0].eventNum > 1 && data[0].eventNum < 100) {
 
+    EcalDrawClass drawObj;
+    drawObj.InitCanvas1Pad();
+    drawObj.UpdateAndSaveCanvas("", data);
+  }
   // std::cout << "Approx deposed energy = " << adc_max_2+adc_max  << "[ADC?]"
   // <<std::endl;
   eventCh.clear();
@@ -699,13 +666,17 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   return true;
 }
 
+// void EcalWork(std::string inputDataTree = "out_all.root",
+//               std::string outputData = "tran_x_38.root") {
 void EcalWork(std::string inputDataTree = "out_all.root",
-              std::string outputData = "tran_x_38.root") {
+              std::string outputData = "trans_38.root",
+              bool TransverAnalysis = true) {
 
   TStopwatch timer1;
   timer1.Start();
 
-  bool TransverAnalysis = true;
+  // bool TransverAnalysis = true;
+  // bool TransverAnalysis = false;
 
   std::vector<TH1F *> h_int_per_channel;
   h_int_per_channel.reserve(NCHANNELS);
