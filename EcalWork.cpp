@@ -377,6 +377,54 @@ bool FindOneStrip(const std::vector<ChannelData> &data,
   }
   return false;
 }
+bool FindTargetChannelInStrip(const std::vector<ChannelData> &strip,
+                              bool alongPhi, double threshold_2,
+                              ChannelData &target) {
+  if (strip.size() < 5)
+    return false;
+
+  std::vector<ChannelData> ordered = strip;
+
+  std::sort(ordered.begin(), ordered.end(),
+            [alongPhi](const ChannelData &a, const ChannelData &b) {
+              return alongPhi ? (a.channel_Z < b.channel_Z)
+                              : (a.channel_Phi < b.channel_Phi);
+            });
+
+  for (size_t i = 2; i + 2 < ordered.size(); ++i) {
+    bool consecutive = (alongPhi ? ((int)ordered[i - 2].channel_Z + 1 ==
+                                        (int)ordered[i - 1].channel_Z &&
+                                    (int)ordered[i - 1].channel_Z + 1 ==
+                                        (int)ordered[i].channel_Z &&
+                                    (int)ordered[i].channel_Z + 1 ==
+                                        (int)ordered[i + 1].channel_Z &&
+                                    (int)ordered[i + 1].channel_Z + 1 ==
+                                        (int)ordered[i + 2].channel_Z)
+                                 : ((int)ordered[i - 2].channel_Phi + 1 ==
+                                        (int)ordered[i - 1].channel_Phi &&
+                                    (int)ordered[i - 1].channel_Phi + 1 ==
+                                        (int)ordered[i].channel_Phi &&
+                                    (int)ordered[i].channel_Phi + 1 ==
+                                        (int)ordered[i + 1].channel_Phi &&
+                                    (int)ordered[i + 1].channel_Phi + 1 ==
+                                        (int)ordered[i + 2].channel_Phi));
+
+    if (!consecutive)
+      continue;
+
+    bool neighborsOK = ordered[i - 2].integral > threshold_2 &&
+                       ordered[i - 1].integral > threshold_2 &&
+                       ordered[i + 1].integral > threshold_2 &&
+                       ordered[i + 2].integral > threshold_2;
+
+    if (neighborsOK) {
+      target = ordered[i];
+      return true;
+    }
+  }
+
+  return false;
+}
 
 bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
                         std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
@@ -500,9 +548,26 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
   //     }
   // }
 
+  ChannelData targetChannel;
+  bool hasTarget = false;
+
+  if (hasPhiStrip) {
+    hasTarget = FindTargetChannelInStrip(filteredData, true, threshold_2,
+                                         targetChannel);
+  } else if (hasZStrip) {
+    hasTarget = FindTargetChannelInStrip(filteredData, false, threshold_2,
+                                         targetChannel);
+  }
+
+  if (!hasTarget) {
+    eventCh.clear();
+    return false;
+  }
+
   eventCh.clear();
-  eventCh = std::move(data);
-  eventCh = std::move(filteredData);
+  // eventCh = std::move(data);
+  // eventCh = std::move(filteredData);
+  eventCh.push_back(targetChannel);
 
   return true;
 }
@@ -510,13 +575,14 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
 // Selection 3x3 Neighbourhood window
 // Finding the second strongest cell
 bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
-                             ChannelData hottestCell, float &adc_max_2) {
-  adc_max_2 = -1;
+                             ChannelData hottestCell,
+                             ChannelData &secondHotCell) {
+  // adc_max_2 = -1;
   float adc_max = hottestCell.integral;
   int phi_0 = hottestCell.channel_Phi;
   int z_0 = hottestCell.channel_Z;
 
-  float min_ratio = 0.70; // dummy value
+  float min_ratio = 0.80; // dummy value
   float max_ratio = 0.95; // dummy value
 
   for (int phi = phi_0 - 1; phi <= phi_0 + 1; ++phi) {
@@ -529,14 +595,19 @@ bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
       // Search for any channel with these indices in this event
       for (const auto &ch : data) {
         if (ch.channel_Phi == phi && ch.channel_Z == z) {
-          if (ch.integral > adc_max_2)
-            adc_max_2 = ch.integral;
+          // if (ch.integral > adc_max_2) {
+          if (ch.integral > secondHotCell.integral) {
+            // adc_max_2 = ch.integral;
+            secondHotCell = ch;
+          }
         }
       }
     }
   }
 
+  float adc_max_2 = secondHotCell.integral;
   float signifOfMax = adc_max / (adc_max + adc_max_2);
+
   if (signifOfMax > max_ratio || signifOfMax < min_ratio)
     return false;
 
@@ -572,11 +643,11 @@ bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
   sum3x3 = sum3x3 + hottestCell.integral;
   // energy fraction outside the compact 3x3 core
   // ratio_cut5x5 = (sum5x5 - sum3x3) / sum5x5;
-  ratio_cut5x5 = sum5x5 / (sum3x3+sum5x5);
-  //std::cout << "5x5: " << sum5x5 << " 3x3: " << sum3x3 << " hot: " << hottestCell.integral << " r: " << ratio_cut5x5 << std::endl;
+  ratio_cut5x5 = sum5x5 / (sum3x3 + sum5x5);
+  // std::cout << "5x5: " << sum5x5 << " 3x3: " << sum3x3 << " hot: " <<
+  // hottestCell.integral << " r: " << ratio_cut5x5 << std::endl;
 
-
-  float max_diffusivity = 0.5f; // dummy value, tune from data
+  float max_diffusivity = 0.2f; // dummy value, tune from data
   if (ratio_cut5x5 > max_diffusivity)
     return false;
 
@@ -588,7 +659,8 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   data.reserve(eventCh.size());
 
   for (int i = 0; i < eventCh.size(); i++) {
-    if (eventCh[i].amplitude < 100)
+    // if (eventCh[i].amplitude < 100)
+    if (eventCh[i].amplitude < 300)
       continue;
     hCut->Fill(2);
     if (eventCh[i].integral < 500)
@@ -608,27 +680,28 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
                                   return a.integral < b.integral;
                                 });
 
-  if (itMax == eventCh.end())
+  // if (itMax == eventCh.end())
+  if (itMax == data.end())
     return false;
 
   const ChannelData &maxCell = *itMax;
   float adc_max = maxCell.integral;
-  // float adc_max_2 = -1;
-  float adc_max_2;
+  // float adc_max_2;
 
   // int maxThreshold = 1000; // dummy value
   // int secondNoise = 50;    // dummy value
-
-  float ration3on3 = 0;
 
   // 2. Reject if hottest cell is too small
   // if (adc_max < maxThreshold)
   //     return false;
   hCut->Fill(4, data.size());
 
-  if (!CheckThreeOnThreeWindow(data, maxCell, adc_max_2))
+  ChannelData secMaxCell;
+  // if (!CheckThreeOnThreeWindow(data, maxCell, adc_max_2, secMaxCell))
+  if (!CheckThreeOnThreeWindow(data, maxCell, secMaxCell))
     return false;
   hCut->Fill(5, data.size());
+  float adc_max_2 = secMaxCell.integral;
 
   if (adc_max_2 < 500)
     return false;
@@ -641,18 +714,19 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
 
   hCut->Fill(7, data.size());
 
-  for (int i = 0; i < data.size(); i++) {
-    int ch = data[i].channelNums;
-    if (ch >= 1 && ch <= NCHANNELS) {
-      int phi_0 = maxCell.channel_Phi;
-      int z_0 = maxCell.channel_Z;
-      if (abs(phi_0 - data[i].channel_Phi) <= 1 &&
-          abs(z_0 - data[i].channel_Z) <= 1) {
-        h_int_per_channel[ch - 1]->Fill(data[i].integral);
-      }
-    }
+  // Fill target channels directly
+  int ch_max = maxCell.channelNums;
+  if (ch_max >= 1 && ch_max <= NCHANNELS && h_int_per_channel[ch_max - 1]) {
+    h_int_per_channel[ch_max - 1]->Fill(maxCell.integral);
   }
-  if (data[0].eventNum > 1 && data[0].eventNum < 100) {
+
+  int ch_second = secMaxCell.channelNums;
+  if (ch_second >= 1 && ch_second <= NCHANNELS &&
+      h_int_per_channel[ch_second - 1]) {
+    h_int_per_channel[ch_second - 1]->Fill(secMaxCell.integral);
+  }
+  // if (data[0].eventNum > 1 && data[0].eventNum < 100) {
+  if (data[0].eventNum > 1700 && data[0].eventNum < 2000) {
 
     EcalDrawClass drawObj;
     drawObj.InitCanvas1Pad();
@@ -666,24 +740,20 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   return true;
 }
 
-// void EcalWork(std::string inputDataTree = "out_all.root",
-//               std::string outputData = "tran_x_38.root") {
 void EcalWork(std::string inputDataTree = "out_all.root",
-              std::string outputData = "trans_38.root",
-              bool TransverAnalysis = true) {
+              std::string outputData = "long_38.root",
+              bool TransverAnalysis = false) {
 
   TStopwatch timer1;
   timer1.Start();
 
-  // bool TransverAnalysis = true;
-  // bool TransverAnalysis = false;
-
   std::vector<TH1F *> h_int_per_channel;
   h_int_per_channel.reserve(NCHANNELS);
   for (int i = 0; i < NCHANNELS; ++i) {
-    h_int_per_channel.push_back(new TH1F(
-        Form("h_int_ch_%d", i + 1),
-        Form("Integral channel %d;Integral;Entries", i + 1), 100, 0, 15000));
+    h_int_per_channel.push_back(
+        new TH1F(Form("h_int_ch_%d", i + 1),
+                 Form("Integral channel %d;Integral;Entries", i + 1), 100, 0,
+                 TransverAnalysis == true ? 15000 : 50000));
   }
 
   TFile *outFile = new TFile(Form("%s", outputData.c_str()), "RECREATE");
@@ -703,15 +773,20 @@ void EcalWork(std::string inputDataTree = "out_all.root",
                             (Float_t)NCHANNELS + 0.5);
   TH1D *h1_chZ = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
   TH1D *h1_chPhi = new TH1D("channel_Phi", ";Phi;count", 12, 0.5, 12.5);
-  TH1D *h1_chAmp = new TH1D("channel_amplitude", ";Amp;count", 100, 0, 10000);
-  TH1D *h1_chInt = new TH1D("channel_integral", ";Amp;count", 300, 0, 15000);
+  TH1D *h1_chAmp = new TH1D("channel_amplitude", ";Amp;count", 100, 0,
+                            TransverAnalysis == true ? 10000 : 30000);
+  TH1D *h1_chInt = new TH1D("channel_integral", ";Amp;count", 300, 0,
+                            TransverAnalysis == true ? 15000 : 50000);
 
   std::filesystem::path outRootPath(outputData);
   std::filesystem::path outDir = outRootPath.parent_path();
   if (outDir.empty()) {
     outDir = ".";
   }
-  std::filesystem::path pictDir = outDir / "pict";
+  // std::filesystem::path pictDir = outDir / "pict" / TransverAnalysis == true
+  // ? "transverse" : "longitudinal";
+  std::filesystem::path pictDir =
+      outDir / "pict" / (TransverAnalysis ? "transverse" : "longitudinal");
   std::filesystem::create_directories(pictDir);
   gSystem->ChangeDirectory(pictDir.string().c_str());
   std::cout << "Pictures will be saved under: " << pictDir << std::endl;
