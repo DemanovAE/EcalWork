@@ -235,7 +235,7 @@ void EcalDrawClass::UpdateAndSaveCanvas(std::string suf, std::vector<ChannelData
             h2_ChIntPhiZ->SetBinContent(h2_ChIntPhiZ->FindBin(chZ, chPhi), chInt);
         }
         gLegend->Draw("same");
-        gCanvas->SaveAs(Form("pict_%s_%i%s.png", gCanvas->GetName(),eventNumber,suf.c_str()));
+        gCanvas->SaveAs(Form("pict_%s%s.png", gCanvas->GetName(),suf.c_str()));
     }else{
         gCanvas->SetName(Form("wf_event_%i",eventNumber));
         gAxisHistoUp->SetTitle(gCanvas->GetTitle());

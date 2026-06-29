@@ -44,6 +44,16 @@ constexpr int MAX_CH = 65;
 const int MAX_Z = 65;
 const int MAX_PHI = 12;
 
+bool SetBinNameCutHisto=true;
+
+// For Long Analysis
+bool TransverAnalysis = false;
+const float gl_long_min_3x3_ratio = 0.55; // dummy value
+const float gl_long_max_3x3_ratio = 0.99; // dummy value
+const float gl_long_max_diffusivity_5x5 = 0.30f; // dummy value, tune from data
+
+// For Trans Analysis
+
 template <typename T>
 void SetWaveformHistogram(const std::vector<T> &data, TH1F *hist,
                           const std::string &name = "waveform",
@@ -584,9 +594,6 @@ bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
   int phi_0 = hottestCell.channel_Phi;
   int z_0 = hottestCell.channel_Z;
 
-  float min_ratio = 0.55; // dummy value
-  float max_ratio = 0.99; // dummy value
-
   for (int phi = phi_0 - 1; phi <= phi_0 + 1; ++phi) {
     for (int z = z_0 - 1; z <= z_0 + 1; ++z) {
 
@@ -612,7 +619,7 @@ bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
   float adc_max_2 = secondHotCell.integral;
   float signifOfMax = adc_max / (adc_max + adc_max_2);
 
-  if (signifOfMax >= max_ratio || signifOfMax < min_ratio)
+  if (signifOfMax >= gl_long_max_3x3_ratio || signifOfMax < gl_long_min_3x3_ratio)
     return false;
 
   return true;
@@ -651,14 +658,16 @@ bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
   // std::cout << "5x5: " << sum5x5 << " 3x3: " << sum3x3 << " hot: " <<
   // hottestCell.integral << " r: " << ratio_cut5x5 << std::endl;
 
-  float max_diffusivity = 0.30f; // dummy value, tune from data
-  if (ratio_cut5x5 > max_diffusivity)
+  if (ratio_cut5x5 > gl_long_max_diffusivity_5x5)
     return false;
 
   return true;
 }
-bool LongAnalysis(std::vector<ChannelData> &eventCh,
-                  std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
+
+bool LongAnalysis(std::vector<ChannelData> &eventCh, 
+                  std::vector<TH1F *> h_int_per_channel, 
+                  TH1D *hCut){
+  
   std::vector<ChannelData> data;
   data.reserve(eventCh.size());
   int itMax2=-1;
@@ -668,7 +677,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
     if (eventCh[i].amplitude < 200)
       continue;
     hCut->Fill(2);
-    hCut->GetXaxis()->SetBinLabel(3, "Amp<200");
+    if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(3, "Amp<200");
     //if (eventCh[i].integral < 500)
     //  continue; // int < 500 is a basic selection  fro all channels in event
     //hCut->Fill(3);
@@ -680,7 +689,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
     return false; // nothing passed cuts, no maximum
 
   hCut->Fill(3,data.size());
-  hCut->GetXaxis()->SetBinLabel(4, "empty");
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(4, "empty event");
 
   // find element with maximum integral
   // // maximum by amplitude
@@ -701,8 +710,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
     return false;
 
   hCut->Fill(4,data.size());
-  hCut->GetXaxis()->SetBinLabel(5, "no Max");
-
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(5, "no Max");
 
   const ChannelData &maxCell = data[itMax];
   float adc_max = maxCell.integral;
@@ -710,21 +718,24 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
 
   if (maxCell.channel_Phi == 1 || maxCell.channel_Phi == 12)
     return false;
+  
   hCut->Fill(5,data.size());
-  hCut->GetXaxis()->SetBinLabel(6, "Phi cut");
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(6, "Phi==1;12");
 
   if (maxCell.channel_Z == 1 || maxCell.channel_Z == 64)
     return false;
+  
   hCut->Fill(6,data.size());
-  hCut->GetXaxis()->SetBinLabel(7, "Z cut");
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(7, "Z==1;64");
 
   // int maxThreshold = 1000; // dummy value
   int maxThreshold = 500; // dummy value
   // 2. Reject if hottest cell is too small
   if (adc_max < maxThreshold)
     return false;
+
   hCut->Fill(7, data.size());
-  hCut->GetXaxis()->SetBinLabel(8, "MaxIntCut");
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(8, Form("1stMaxInt>%i",maxThreshold));
 
   // if (data.size() > 20 || data.size() < 5)
   //   return false; //
@@ -734,14 +745,15 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   if (!CheckThreeOnThreeWindow(data, maxCell, secMaxCell,itMax2))
     return false;
   hCut->Fill(8, data.size());
-  hCut->GetXaxis()->SetBinLabel(9, "3x3");
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(9, Form("1st/(1st+2nd)>%.2f",gl_long_min_3x3_ratio));
 
   float adc_max_2 = secMaxCell.integral;
-
-  if (adc_max_2 < 500)
+  int maxThreshold2 = 500;
+  if (adc_max_2 < maxThreshold2)
     return false;
   hCut->Fill(9, data.size());
-  hCut->GetXaxis()->SetBinLabel(10, "MaxIntCut 2");
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(10,Form("2ndMaxInt>%i",maxThreshold2));
+
 
   float sum5x5, sum3x3, ratio_cut5x5;
 
@@ -749,8 +761,10 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
     return false;
 
   hCut->Fill(10, data.size());
-  hCut->GetXaxis()->SetBinLabel(11, "5x5");
-
+  if(SetBinNameCutHisto){
+    hCut->GetXaxis()->SetBinLabel(11, Form("(5x5)/(3x3+5x5)<%.2f",gl_long_max_diffusivity_5x5));
+    SetBinNameCutHisto=false;
+  }
 
   // Fill target channels directly
   int ch_max = maxCell.channelNums;
@@ -765,7 +779,6 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
 
   std::vector<ChannelData> FinalCh = {maxCell,secMaxCell};
   
-  //if (data[0].eventNum > 1700 && data[0].eventNum < 1900) {
   if (data[0].eventNum > 10000 && data[0].eventNum < 15000 && maxCell.integral>20000) {
     EcalDrawClass drawObj;
     drawObj.InitCanvas1Pad();
@@ -781,8 +794,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
 }
 
 void EcalWork(std::string inputDataTree = "out_all.root",
-              std::string outputData = "test_long_38.root",
-              bool TransverAnalysis = false) {
+              std::string outputData = "basket_38.root") {
 
   TStopwatch timer1;
   timer1.Start();
@@ -796,7 +808,7 @@ void EcalWork(std::string inputDataTree = "out_all.root",
                  TransverAnalysis == true ? 15000 : 50000));
   }
 
-  TFile *outFile = new TFile(Form("%s", outputData.c_str()), "RECREATE");
+  TFile *outFile = new TFile(Form("%s_%s", TransverAnalysis==true ? "trans" : "long", outputData.c_str()), "RECREATE");
 
   TFile *iFile = TFile::Open(inputDataTree.c_str());
   TTreeReader reader("events", iFile);
@@ -908,7 +920,6 @@ void EcalWork(std::string inputDataTree = "out_all.root",
 
   //h_CountCut->Scale(100./h_CountCut->GetBinContent(1));
 
-
   outFile->cd();
   h1_evNum->Write();
   h_CountCut->Write();
@@ -938,7 +949,7 @@ void EcalWork(std::string inputDataTree = "out_all.root",
   FitTargetChannelHistograms(outFile);
 
   // ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
-  std::cout << "\n\nOutput saved to: " << outputData << "\n\n" << std::endl;
+  std::cout << "\n\nOutput saved to: " << outFile->GetName() << "\n\n" << std::endl;
 
   timer1.Stop();
   timer1.Print();
