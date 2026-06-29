@@ -196,7 +196,7 @@ void EcalDrawClass::UpdateAndSaveCanvas(std::string suf, std::vector<ChannelData
     if(data.empty())return;
     std::vector<ChannelData> dataDraw;
     for (int i = 0; i < numDraw.size(); i++){
-        dataDraw.push_back(data[i]);
+        dataDraw.push_back(data[numDraw[i]]);
     }
     UpdateAndSaveCanvas(suf,dataDraw);
 }

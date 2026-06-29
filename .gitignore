@@ -1,4 +1,8 @@
 build/
 pict/
+*pict*/
+*out*/
 
+log*.txt
+.DS_Store
 *.root
