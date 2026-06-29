@@ -48,6 +48,8 @@ bool SetBinNameCutHisto=true;
 
 // For Long Analysis
 bool TransverAnalysis = false;
+const int gl_long_max_1st_Integral = 1000;
+const int gl_long_max_2nd_Integral = 500;
 const float gl_long_min_3x3_ratio = 0.55; // dummy value
 const float gl_long_max_3x3_ratio = 0.99; // dummy value
 const float gl_long_max_diffusivity_5x5 = 0.30f; // dummy value, tune from data
@@ -673,11 +675,10 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   int itMax2=-1;
   
   for (int i = 0; i < eventCh.size(); i++) {
-    //if (eventCh[i].amplitude < 100)
-    if (eventCh[i].amplitude < 200)
-      continue;
+    //if (eventCh[i].amplitude < 200)
+    //  continue;
     hCut->Fill(2);
-    if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(3, "Amp<200");
+    if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(3, "Nope");
     //if (eventCh[i].integral < 500)
     //  continue; // int < 500 is a basic selection  fro all channels in event
     //hCut->Fill(3);
@@ -691,30 +692,24 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   hCut->Fill(3,data.size());
   if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(4, "empty event");
 
-  // find element with maximum integral
-  // // maximum by amplitude
-  // auto itMax = std::max_element(data.begin(), data.end(),
-  //                               [](const ChannelData &a, const ChannelData &b) {
-  //                                 return a.integral < b.integral;
-  //                               });
-  int MaxIntegral = -1;
+  int MaxIntegral_1st = -9999999;
   int itMax = -1;
   for(int iCh=0; iCh<data.size();iCh++ ){
-    if(data[iCh].integral>MaxIntegral){
-      MaxIntegral=data[iCh].integral;
+    if(data[iCh].integral>MaxIntegral_1st){
+      MaxIntegral_1st=data[iCh].integral;
       itMax = iCh;
     }
   }
 
-  if(MaxIntegral==-1)
-    return false;
-
-  hCut->Fill(4,data.size());
-  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(5, "no Max");
-
   const ChannelData &maxCell = data[itMax];
   float adc_max = maxCell.integral;
   // float adc_max_2;
+
+  if(adc_max<gl_long_max_1st_Integral)
+    return false;
+
+  hCut->Fill(4,data.size());
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(5, Form("1stMaxInt>%i",gl_long_max_1st_Integral));
 
   if (maxCell.channel_Phi == 1 || maxCell.channel_Phi == 12)
     return false;
@@ -728,41 +723,28 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   hCut->Fill(6,data.size());
   if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(7, "Z==1;64");
 
-  // int maxThreshold = 1000; // dummy value
-  int maxThreshold = 500; // dummy value
-  // 2. Reject if hottest cell is too small
-  if (adc_max < maxThreshold)
-    return false;
-
-  hCut->Fill(7, data.size());
-  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(8, Form("1stMaxInt>%i",maxThreshold));
-
-  // if (data.size() > 20 || data.size() < 5)
-  //   return false; //
-  // hCut->Fill(5, data.size());
-
   ChannelData secMaxCell;
   if (!CheckThreeOnThreeWindow(data, maxCell, secMaxCell,itMax2))
     return false;
-  hCut->Fill(8, data.size());
-  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(9, Form("1st/(1st+2nd)>%.2f",gl_long_min_3x3_ratio));
+  
+  hCut->Fill(7, data.size());
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(8, Form("1st/(1st+2nd)>%.2f",gl_long_min_3x3_ratio));
 
-  float adc_max_2 = secMaxCell.integral;
-  int maxThreshold2 = 500;
-  if (adc_max_2 < maxThreshold2)
+  float MaxIntegral_2st = secMaxCell.integral;
+  if (MaxIntegral_2st < gl_long_max_2nd_Integral)
     return false;
-  hCut->Fill(9, data.size());
-  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(10,Form("2ndMaxInt>%i",maxThreshold2));
-
+  
+  hCut->Fill(8, data.size());
+  if(SetBinNameCutHisto)hCut->GetXaxis()->SetBinLabel(9,Form("2ndMaxInt>%i",gl_long_max_2nd_Integral));
 
   float sum5x5, sum3x3, ratio_cut5x5;
 
   if (!CalcAreaFiveOnFiveWindow(data, maxCell, sum5x5, sum3x3, ratio_cut5x5))
     return false;
 
-  hCut->Fill(10, data.size());
+  hCut->Fill(9, data.size());
   if(SetBinNameCutHisto){
-    hCut->GetXaxis()->SetBinLabel(11, Form("(5x5)/(3x3+5x5)<%.2f",gl_long_max_diffusivity_5x5));
+    hCut->GetXaxis()->SetBinLabel(10, Form("(5x5)/(3x3+5x5)<%.2f",gl_long_max_diffusivity_5x5));
     SetBinNameCutHisto=false;
   }
 
