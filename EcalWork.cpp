@@ -48,11 +48,11 @@ bool SetBinNameCutHisto = true;
 
 // For Long Analysis
 bool TransverAnalysis = false;
-const int gl_long_max_1st_Integral = 1000;
+const int gl_long_max_1st_Integral = 1200;
 const int gl_long_max_2nd_Integral = 500;
-const float gl_long_min_3x3_ratio = 0.9;        // dummy value
-const float gl_long_max_3x3_ratio = 0.99;        // dummy value
-const float gl_long_max_diffusivity_5x5 = 0.4f; // dummy value, tune from data
+const float gl_long_min_3x3_ratio = 0.70;       // dummy value
+const float gl_long_max_3x3_ratio = 0.99;       // dummy value
+const float gl_long_max_diffusivity_5x5 = 0.45; // dummy value, tune from data
 
 // For Trans Analysis
 
@@ -588,7 +588,8 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
 // Finding the second strongest cell
 bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
                              ChannelData hottestCell,
-                             ChannelData &secondHotCell, int &num_i) {
+                             ChannelData &secondHotCell, int &num_i,
+                             float &signifOfMax) {
   // adc_max_2 = -1;
   num_i = -1;
   // to prevent unpredictable behavior
@@ -601,7 +602,8 @@ bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
   for (int ch = 0; ch < static_cast<int>(data.size()); ++ch) {
     int dPhi = std::abs(data[ch].channel_Phi - phi_0);
     int dZ = std::abs(data[ch].channel_Z - z_0);
-    if( data[ch].channel_Phi == phi_0 && data[ch].channel_Z == z_0 ) continue;
+    if (data[ch].channel_Phi == phi_0 && data[ch].channel_Z == z_0)
+      continue;
     if (dPhi <= 1 && dZ <= 1) {
       if (data[ch].integral > secondHotCell.integral) {
         secondHotCell = data[ch];
@@ -616,11 +618,8 @@ bool CheckThreeOnThreeWindow(std::vector<ChannelData> &data,
   if (num_i < 0 || adc_max_2 <= 0.0f)
     return false;
 
-  float signifOfMax = adc_max / (adc_max + adc_max_2);
-
-  if (signifOfMax >= gl_long_max_3x3_ratio ||
-      signifOfMax < gl_long_min_3x3_ratio)
-    return false;
+  // float signifOfMax = adc_max / (adc_max + adc_max_2);
+  signifOfMax = adc_max / (adc_max + adc_max_2);
 
   return true;
 }
@@ -635,50 +634,25 @@ bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
   int phi_0 = hottestCell.channel_Phi;
   int z_0 = hottestCell.channel_Z;
 
-  // std::cout << " ----------------------------- " << std::endl;
-  // std::cout << " CalcAreaFiveOnFiveWindow " << std::endl;
-
   for (const auto &ch : data) {
     int dPhi = std::abs(ch.channel_Phi - phi_0);
     int dZ = std::abs(ch.channel_Z - z_0);
-    // std::cout << " (dPhi; dZ) " << dPhi << ", " << dZ << std::endl;
 
-    // inside 5x5 window: |Δphi| ≤ 2 and |Δz| ≤ 2
-    if (dPhi <= 2 && dZ <= 2) {
-      // std::cout << "[ 5x5 ]: hottest cell (" << hottestCell.channel_Phi << ",
-      // "
-      //           << hottestCell.channel_Z << ") (dPhi; dZ) " << dPhi << ", "
-      //           << dZ << "  (phi,Z): (" << ch.channel_Phi << ", "
-      //           << ch.channel_Z << ") " << std::endl;
+    if (dPhi <= 2 && dZ <= 2)
       sum5x5 += ch.integral;
-    }
 
-    if (dPhi <= 1 && dZ <= 1) {
-      // std::cout << "[ 3x3 ]: hottest cell (" << hottestCell.channel_Phi << ",
-      // "
-      //           << hottestCell.channel_Z << ") (dPhi; dZ) " << dPhi << ", "
-      //           << dZ << "  (phi,Z): (" << ch.channel_Phi << ", "
-      //           << ch.channel_Z << ") " << std::endl;
+    if (dPhi <= 1 && dZ <= 1)
       sum3x3 += ch.integral;
-    }
   }
+
   if (sum5x5 <= 0.0f)
     return false;
 
-  // energy outside 3x3 core but still in 5x5
   float e_outside_core = sum5x5 - sum3x3;
-  ratio_cut5x5 = e_outside_core / sum5x5;
-
   if (e_outside_core < 0.0f)
     e_outside_core = 0.0f;
+
   ratio_cut5x5 = e_outside_core / sum5x5;
-
-  // std::cout << "sum3x3: " << sum3x3 << "  sum5x5: " << sum5x5
-  //           << "  e_outside_core: " << e_outside_core
-  //           << "  ratio_cut5x5: " << ratio_cut5x5 << std::endl;
-  if (ratio_cut5x5 > gl_long_max_diffusivity_5x5)
-    return false;
-
   return true;
 }
 
@@ -730,29 +704,33 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
     hCut->GetXaxis()->SetBinLabel(
         5, Form("1stMaxInt>%i", gl_long_max_1st_Integral));
 
-  // if (maxCell.channel_Phi == 1 || maxCell.channel_Phi == 12)
-  //   return false;
+  if (maxCell.channel_Phi == 1 || maxCell.channel_Phi == 12)
+    return false;
 
   // Need full 5x5 around hottest cell
-  if (maxCell.channel_Phi <= 2 || maxCell.channel_Phi >= 11)
-    return false;
+  // if (maxCell.channel_Phi <= 2 || maxCell.channel_Phi >= 11)
+  //   return false;
 
   hCut->Fill(5, data.size());
   if (SetBinNameCutHisto)
     hCut->GetXaxis()->SetBinLabel(6, "Phi==1;12");
 
-  // if (maxCell.channel_Z == 1 || maxCell.channel_Z == 64)
-  //   return false;
-
-  if (maxCell.channel_Z <= 2 || maxCell.channel_Z >= 63)
+  if (maxCell.channel_Z == 1 || maxCell.channel_Z == 64)
     return false;
+
+  // if (maxCell.channel_Z <= 2 || maxCell.channel_Z >= 63)
+  //   return false;
 
   hCut->Fill(6, data.size());
   if (SetBinNameCutHisto)
     hCut->GetXaxis()->SetBinLabel(7, "Z==1;64");
 
+  float ratio_3x3 = 0;
   ChannelData secMaxCell;
-  if (!CheckThreeOnThreeWindow(data, maxCell, secMaxCell, itMax2))
+  if (!CheckThreeOnThreeWindow(data, maxCell, secMaxCell, itMax2, ratio_3x3))
+    return false;
+
+  if (ratio_3x3 >= gl_long_max_3x3_ratio || ratio_3x3 < gl_long_min_3x3_ratio)
     return false;
 
   hCut->Fill(7, data.size());
@@ -774,6 +752,8 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   if (!CalcAreaFiveOnFiveWindow(data, maxCell, sum5x5, sum3x3, ratio_cut5x5))
     return false;
 
+  if (ratio_cut5x5 > gl_long_max_diffusivity_5x5)
+    return false;
   hCut->Fill(9, data.size());
   if (SetBinNameCutHisto) {
     hCut->GetXaxis()->SetBinLabel(
@@ -811,10 +791,19 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   }
   // std::cout << "Approx deposed energy = " << adc_max_2+adc_max  << "[ADC?]"
   // <<std::endl;
-  eventCh.clear();
-  FinalCh.pop_back();
-  FinalCh.back().integral=coreEnergy;
-  eventCh = std::move(FinalCh);
+  // eventCh.clear();
+  // FinalCh.pop_back();
+  // FinalCh.back().integral = coreEnergy;
+  // eventCh = std::move(FinalCh);
+
+  // eventCh.clear();
+  // eventCh = std::move(FinalCh);
+
+    eventCh.clear();
+  ChannelData outCell = maxCell;
+  outCell.integral = coreEnergy;
+  // put that single cell into eventCh
+  eventCh.push_back(outCell);
 
   return true;
 }
