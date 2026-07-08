@@ -29,3 +29,17 @@ install(FILES MpdDataConverter.h DESTINATION include)
 
 message(STATUS "ROOT found: ${ROOT_VERSION}")
 message(STATUS "Library will be built as: libMPDDataConverter.so")
+
+add_executable(EcalWorkExec
+  EcalWorkMain.C
+  EcalWork.cpp
+  EcalDrawClass.cpp
+  MpdDataConverter.cpp
+)
+
+target_link_libraries(EcalWorkExec
+  PRIVATE
+    MPDDataConverter           # or whatever target name you use
+    ROOT::Core ROOT::RIO ROOT::Tree ROOT::Hist
+    # add other ROOT components you actually use
+)

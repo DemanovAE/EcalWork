@@ -48,8 +48,8 @@ bool SetBinNameCutHisto = true;
 
 // For Long Analysis
 bool TransverAnalysis = false;
-const int gl_long_max_1st_Integral = 1200;
-const int gl_long_max_2nd_Integral = 500;
+const int gl_long_max_1st_Integral = 1000;
+const int gl_long_max_2nd_Integral = 200;
 const float gl_long_min_3x3_ratio = 0.70;       // dummy value
 const float gl_long_max_3x3_ratio = 0.99;       // dummy value
 const float gl_long_max_diffusivity_5x5 = 0.45; // dummy value, tune from data
@@ -808,50 +808,102 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   return true;
 }
 
-void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
-              std::string outputData = "hs4_133_basket5_1616162.root") {
+// void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
+//               std::string outputData = "hs4_133_basket5_1616162.root") {
 
+void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
+  std::string outputData   = "hs4_133_basket5_1616162.root",
+  Long64_t firstEntry      = 0,
+  Long64_t lastEntry       = 20.e6)
+{
   TStopwatch timer1;
   timer1.Start();
 
+  // Per-channel histograms for target-cell integral / core energy
   std::vector<TH1F *> h_int_per_channel;
   h_int_per_channel.reserve(NCHANNELS);
   for (int i = 0; i < NCHANNELS; ++i) {
-    h_int_per_channel.push_back(
-        new TH1F(Form("h_int_ch_%d", i + 1),
-                 Form("Integral channel %d;Integral;Entries", i + 1), 100, 0,
-                 TransverAnalysis == true ? 15000 : 50000));
+  h_int_per_channel.push_back(
+  new TH1F(Form("h_int_ch_%d", i + 1),
+      Form("Integral channel %d;Integral;Entries", i + 1),
+      100, 0,
+      TransverAnalysis == true ? 15000 : 50000));
   }
 
-  TFile *outFile =
-      new TFile(Form("%s_%s", TransverAnalysis == true ? "trans" : "long",
-                     outputData.c_str()),
-                "RECREATE");
+  // Output file
+  // TFile *outFile =
+  // new TFile(Form("%s_%s", TransverAnalysis == true ? "trans" : "long",
+  //         outputData.c_str()),
+  //     "RECREATE");
 
+  // Use outputData exactly as given (full path from script)
+  TFile *outFile = new TFile(outputData.c_str(), "RECREATE");
+  if (!outFile || outFile->IsZombie()) {
+    std::cerr << "Cannot create output file " << outputData << std::endl;
+    return;
+  }
+
+  // Input file and tree
   TFile *iFile = TFile::Open(inputDataTree.c_str());
-  TTreeReader reader("events", iFile);
+  if (!iFile || iFile->IsZombie()) {
+    std::cerr << "Cannot open input file " << inputDataTree << std::endl;
+    return;
+  }
 
+  TTree *tree = dynamic_cast<TTree*>(iFile->Get("events"));
+  if (!tree) {
+    std::cerr << "Cannot find TTree 'events' in file "
+      << inputDataTree << std::endl;
+    return;
+  }
+
+  Long64_t nEntries = tree->GetEntries();
   std::cout << "The number of entries in decoded file '"
-            << inputDataTree.c_str() << "' " << reader.GetEntries()
-            << std::endl;
-  TTreeReaderValue<UInt_t> eventNumber(reader, "eventNum");
-  TTreeReaderValue<Int_t> chInt(reader, "integral");
-  TTreeReaderValue<Int_t> chAmp(reader, "amplitude");
-  TTreeReaderValue<unsigned short> chNum(reader, "channelNums");
-  TTreeReaderValue<unsigned short> chZ(reader, "channel_Z");
-  TTreeReaderValue<unsigned short> chPhi(reader, "channel_Phi");
+             << inputDataTree.c_str() << "' " << nEntries << std::endl;
 
+  // Clamp entry range
+  if (lastEntry < 0 || lastEntry > nEntries) {
+    lastEntry = nEntries;
+  }
+  if (firstEntry < 0) {
+    firstEntry = 0;
+  }
+  if (firstEntry >= lastEntry) {
+    std::cerr << "Empty entry range: firstEntry=" << firstEntry
+              << " lastEntry=" << lastEntry << std::endl;
+    return;
+  }
+
+  std::cout << "Processing entries in range ["
+            << firstEntry << ", " << lastEntry << ")" << std::endl;
+
+  // Branch variables
+  UInt_t         b_eventNum = 0;
+  Int_t          b_integral = 0;
+  Int_t          b_amplitude = 0;
+  unsigned short b_chNum = 0;
+  unsigned short b_chZ   = 0;
+  unsigned short b_chPhi = 0;
+
+  tree->SetBranchAddress("eventNum",    &b_eventNum);
+  tree->SetBranchAddress("integral",    &b_integral);
+  tree->SetBranchAddress("amplitude",   &b_amplitude);
+  tree->SetBranchAddress("channelNums", &b_chNum);
+  tree->SetBranchAddress("channel_Z",   &b_chZ);
+  tree->SetBranchAddress("channel_Phi", &b_chPhi);
+
+  // Summary histograms
   TH1D *h1_evNum = new TH1D("event_number", ";event;count", 2.0e6, 0, 2.0e6);
-  TH1D *h1_chNum = new TH1D("channel_number", ";Num;count", NCHANNELS, 0.5,
-                            (Float_t)NCHANNELS + 0.5);
-  TH1D *h1_chZ = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
+  TH1D *h1_chNum = new TH1D("channel_number", ";Num;count",
+                  NCHANNELS, 0.5, (Float_t)NCHANNELS + 0.5);
+  TH1D *h1_chZ   = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
   TH1D *h1_chPhi = new TH1D("channel_Phi", ";Phi;count", 12, 0.5, 12.5);
   TH1D *h1_chAmp = new TH1D("channel_amplitude", ";Amp;count", 100, 0,
-                            TransverAnalysis == true ? 10000 : 30000);
+                  TransverAnalysis == true ? 10000 : 30000);
   TH1D *h1_chInt = new TH1D("channel_integral", ";Amp;count", 500, 0,
-                            // TransverAnalysis == true ? 15000 : 50000);
-                            TransverAnalysis == true ? 15000 : 1.e5);
+                  TransverAnalysis == true ? 15000 : 1.e5);
 
+  // Pictures directory
   std::filesystem::path outRootPath(outputData);
   std::filesystem::path outDir = outRootPath.parent_path();
   if (outDir.empty()) {
@@ -859,125 +911,138 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
   }
 
   std::filesystem::path pictDir =
-      outDir / "pict" / (TransverAnalysis ? "transverse" : "longitudinal");
+  outDir / "pict" / (TransverAnalysis ? "transverse" : "longitudinal");
   std::filesystem::create_directories(pictDir);
   gSystem->ChangeDirectory(pictDir.string().c_str());
   std::cout << "Pictures will be saved under: " << pictDir << std::endl;
 
+  // WF directory (kept for consistency, though not used now)
   TDirectory *WfDir = outFile->mkdir("channel_wf");
   WfDir->cd();
 
+  // Per-event handling
   UInt_t currentEventNum = 0;
   bool hasData = false;
   std::vector<ChannelData> ChannelDataInEvent;
   ChannelDataInEvent.reserve(NCHANNELS);
 
   TH1D *h_CountCut =
-      new TH1D("hCountCut", "Number of events after applying cut;;count", 20,
-               -0.5, 19.5);
+  new TH1D("hCountCut", "Number of events after applying cut;;count",
+    20, -0.5, 19.5);
 
-  while (reader.Next()) {
+  // Main loop over the selected entry range
+    for (Long64_t iEntry = firstEntry; iEntry < lastEntry; ++iEntry) {
+    tree->GetEntry(iEntry);
+
     ChannelData data;
-    data.eventNum = *eventNumber;
-    data.integral = *chInt;
-    data.amplitude = *chAmp;
-    data.channelNums = *chNum;
-    data.channel_Z = *chZ;
-    data.channel_Phi = *chPhi;
+    data.eventNum    = b_eventNum;
+    data.integral    = b_integral;
+    data.amplitude   = b_amplitude;
+    data.channelNums = b_chNum;
+    data.channel_Z   = b_chZ;
+    data.channel_Phi = b_chPhi;
 
     h_CountCut->Fill(0.);
     h_CountCut->GetXaxis()->SetBinLabel(1, "def");
 
-    // Проверка на конец дерева
-    if (data.eventNum == 0) {
-      data.eventNum =
-          currentEventNum + 1; // Новый номер, чтобы вызвать обработку
-    }
-
+    // Event building based on eventNum, same logic as original code
     if (!hasData) {
       currentEventNum = data.eventNum;
       hasData = true;
-    } else if (data.eventNum !=
-               currentEventNum) { // Тут все действия с одним событием и
-                                  // каналами сработавшими в событии
-      if (ChannelDataInEvent.size() <= MAX_CH) {
-        h_CountCut->Fill(1, ChannelDataInEvent.size());
-        h_CountCut->GetXaxis()->SetBinLabel(2, "Ch.Size()<65");
+    } else if (data.eventNum != currentEventNum) {
+        // Process finished event
+        if (ChannelDataInEvent.size() <= MAX_CH) {
+          h_CountCut->Fill(1, ChannelDataInEvent.size());
+          h_CountCut->GetXaxis()->SetBinLabel(2, "Ch.Size()<65");
 
-        bool KeyChData = false;
+          bool KeyChData = false;
 
-        if (TransverAnalysis) {
-          KeyChData = TransverseAnalysis(ChannelDataInEvent, h_int_per_channel,
-                                         h_CountCut);
-        } else {
-          KeyChData =
-              LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
-        }
-
-        if (KeyChData == true) {
-          for (int i = 0; i < ChannelDataInEvent.size(); i++) {
-            h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
-            h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
-            h1_chInt->Fill(ChannelDataInEvent[i].integral);
-            h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
-            h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
-            h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+          if (TransverAnalysis) {
+            KeyChData = TransverseAnalysis(ChannelDataInEvent,
+                                        h_int_per_channel,
+                                        h_CountCut);
+          } else {
+            KeyChData = LongAnalysis(ChannelDataInEvent,
+                                  h_int_per_channel,
+                                  h_CountCut);
           }
-        }
-      }
-      ChannelDataInEvent.clear();
-      currentEventNum = data.eventNum;
-    } // конец магии над событием
 
-    // Если это была сторожевая запись - выходим (не добавляем её)
-    if (*eventNumber == 0) {
-      break;
+          if (KeyChData) {
+            for (int i = 0; i < (int)ChannelDataInEvent.size(); i++) {
+              h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+              h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+              h1_chInt->Fill(ChannelDataInEvent[i].integral);
+              h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+              h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+              h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+            }
+          }
     }
-
-    // if (*eventNumber == 2. ) {
-    //   break;
-    // }
+    ChannelDataInEvent.clear();
+    currentEventNum = data.eventNum;
+    }
 
     ChannelDataInEvent.push_back(data);
   }
 
-  // h_CountCut->Scale(100./h_CountCut->GetBinContent(1));
+// Process the last event in the range (if any)
+if (!ChannelDataInEvent.empty() && ChannelDataInEvent.size() <= MAX_CH) {
+bool KeyChData = false;
 
-  outFile->cd();
-  h1_evNum->Write();
-  h_CountCut->Write();
-  h1_chAmp->Write();
-  h1_chInt->Write();
-  h1_chNum->Write();
-  h1_chPhi->Write();
-  h1_chZ->Write();
+if (TransverAnalysis) {
+KeyChData = TransverseAnalysis(ChannelDataInEvent,
+                         h_int_per_channel,
+                         h_CountCut);
+} else {
+KeyChData = LongAnalysis(ChannelDataInEvent,
+                   h_int_per_channel,
+                   h_CountCut);
+}
 
-  // Create (or get) subdirectory for target-channel histograms
-  TDirectory *dirTargets = nullptr;
-  if (!(dirTargets = (TDirectory *)outFile->Get("target_channels"))) {
-    dirTargets = outFile->mkdir("target_channels");
-  }
+if (KeyChData) {
+for (int i = 0; i < (int)ChannelDataInEvent.size(); i++) {
+h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+h1_chInt->Fill(ChannelDataInEvent[i].integral);
+h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+}
+}
+}
 
-  // Move into that subdirectory
-  dirTargets->cd();
+// Write basic histograms
+outFile->cd();
+h1_evNum->Write();
+h_CountCut->Write();
+h1_chAmp->Write();
+h1_chInt->Write();
+h1_chNum->Write();
+h1_chPhi->Write();
+h1_chZ->Write();
 
-  // Write all per-channel histograms there
-  for (auto *h : h_int_per_channel) {
-    if (!h)
-      continue;
-    h->Write();
-  }
+// Subdirectory for target-channel histograms
+TDirectory *dirTargets = (TDirectory*)outFile->Get("target_channels");
+if (!dirTargets) {
+dirTargets = outFile->mkdir("target_channels");
+}
+dirTargets->cd();
 
-  outFile->cd();
-  FitTargetChannelHistograms(outFile);
+// Write per-channel target histograms
+for (auto *h : h_int_per_channel) {
+if (!h) continue;
+h->Write();
+}
 
-  // ProgressBar(converter.inFile.tellg(), converter.inFile.tellg());
-  std::cout << "\n\nOutput saved to: " << outFile->GetName() << "\n\n"
-            << std::endl;
+outFile->cd();
+FitTargetChannelHistograms(outFile);
 
-  timer1.Stop();
-  timer1.Print();
-  outFile->Close();
+std::cout << "\n\nOutput saved to: " << outFile->GetName() << "\n\n"
+<< std::endl;
+
+timer1.Stop();
+timer1.Print();
+outFile->Close();
 }
 
 // Convert iFile.data to oFile.root without cuts
