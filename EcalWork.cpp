@@ -783,12 +783,12 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   }
   std::vector<ChannelData> FinalCh = {maxCell, secMaxCell};
 
-  if (data[0].eventNum > 10000 && data[0].eventNum < 10100) {
-    EcalDrawClass drawObj;
-    drawObj.InitCanvas1Pad();
-    drawObj.UpdateAndSaveCanvas("", data);
-    drawObj.UpdateAndSaveCanvas("_cut", FinalCh);
-  }
+  // if (data[0].eventNum > 10000 && data[0].eventNum < 10100) {
+  //   EcalDrawClass drawObj;
+  //   drawObj.InitCanvas1Pad();
+  //   drawObj.UpdateAndSaveCanvas("", data);
+  //   drawObj.UpdateAndSaveCanvas("_cut", FinalCh);
+  // }
   // std::cout << "Approx deposed energy = " << adc_max_2+adc_max  << "[ADC?]"
   // <<std::endl;
   // eventCh.clear();
@@ -808,8 +808,8 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   return true;
 }
 
-void EcalWork(std::string inputDataTree = "out_all.root",
-              std::string outputData = "basket_38.root") {
+void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
+              std::string outputData = "hs4_133_basket5_1616162.root") {
 
   TStopwatch timer1;
   timer1.Start();
@@ -933,6 +933,10 @@ void EcalWork(std::string inputDataTree = "out_all.root",
     if (*eventNumber == 0) {
       break;
     }
+
+    // if (*eventNumber == 2. ) {
+    //   break;
+    // }
 
     ChannelDataInEvent.push_back(data);
   }
