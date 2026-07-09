@@ -1,41 +1,35 @@
 # MPD Data Converter / ECalWork
 
 Библиотека и утилиты для:
-1. конвертации бинарных файлов калориметра MPD (`.data`) в ROOT-файлы с TTree `events`;
-2. анализа этих ROOT-файлов (продольный / поперечный анализ ECAL) локально и на кластере (SLURM job array).
+1. конвертации бинарных файлов ECAL MPD (`.data`) в ROOT-файлы с TTree `events`;
+2. анализа этих ROOT-файлов (продольный / поперечный анализ ECAL) локально и на кластере (SLURM job array), с управляемыми критериями отбора через командную строку / bash-скрипты.
 
 Library and tools for:
-1. converting MPD calorimeter binary `.data` files to ROOT files with an `events` TTree;
-2. running longitudinal / transverse ECAL analysis on these ROOT files, locally or on a SLURM cluster (job arrays).
+1. converting MPD ECAL binary `.data` files to ROOT files with an `events` TTree;
+2. running longitudinal / transverse ECAL analysis on these ROOT files, locally or on a SLURM cluster (job arrays), with selection cuts controlled from the shell.
 
 ---
 
-## 1. Сборка / Build
+## 1. Build
 
 ```bash
-# Клонирование репозитория / Clone repository
 git clone https://github.com/DemanovAE/EcalWork.git
 cd EcalWork
 
-# Сборка CMake / Build with CMake
 mkdir build && cd build
 cmake ..
-make
+make -j4 EcalWorkExec
 ```
 
-После сборки будут созданы (имена могут отличаться, но логика такая):
-- основная библиотека преобразования данных: `build/libMPDDataConverter.so` (или `.dylib` на macOS);
-- исполнительный файл анализа: `build/EcalWorkExec`.
-
-After building you get (names may differ slightly, but conceptually):
+After building you get:
 - core data conversion library: `build/libMPDDataConverter.so` (or `.dylib` on macOS);
 - analysis executable: `build/EcalWorkExec`.
 
 ---
 
-## 2. Шаг 1: Конвертация `.data` → ROOT / Step 1: `.data` → ROOT
+## 2. Step 1: `.data` → ROOT (`ConvertToRoot`)
 
-Конвертация выполняется функцией:
+Conversion from raw `.data` to a ROOT file with `events` TTree is done by:
 
 ```cpp
 void ConvertToRoot(int targetEvent = -1,
@@ -44,131 +38,171 @@ void ConvertToRoot(int targetEvent = -1,
                    std::string outputData = "out_all.root");
 ```
 
-Типичный запуск в ROOT (интерактивный узел, без SLURM):
+Typical interactive usage in ROOT:
 
 ```bash
-# Интерактивный ROOT
 root -l EcalWork.cpp
 ```
 
-Внутри ROOT:
+Inside ROOT:
 
 ```cpp
 .L EcalWork.cpp+
 
-// Простой пример: конвертация всего файла в один ROOT TTree "events"
-ConvertToRoot(-1, {}, "/path/to/run_rc-hs1_088.data", "run_rc-hs1_088.root");
+ConvertToRoot(-1, {},
+              "/path/to/run_rc-hs1_088.data",
+              "run_rc-hs1_088.root");
 ```
-
-Что делает `ConvertToRoot`:
-- читает бинарный `.data` файл, используя `MpdDataConverter`;
-- применяет настройки pedestal и обработку пиков/интегралов (см. код в `EcalWork.cpp`);
-- создаёт ROOT-файл `outputData` с TTree `events` и нужными полями;
-- при необходимости может сохранять waveform-гистограммы и картинки (каталог `pict/` рядом с ROOT-файлом).
 
 What `ConvertToRoot` does:
 - reads the raw `.data` file via `MpdDataConverter`;
-- applies pedestal and ADC waveform processing (see `EcalWork.cpp`);
-- produces a ROOT file `outputData` with an `events` TTree;
-- optionally saves waveform histograms and plots (under `pict/` next to the ROOT file).
+- applies pedestal and waveform processing (see `EcalWork.cpp`);
+- produces a ROOT file `outputData` with an `events` TTree (branches `eventNum`, `integral`, `amplitude`, `channelNums`, `channel_Z`, `channel_Phi`);
+- can optionally save waveform histograms / pictures under `pict/`.
 
 ---
 
-## 3. Шаг 2: Анализ ROOT TTree / Step 2: ROOT TTree analysis
+## 3. Step 2: ROOT TTree analysis (`EcalWork` / `EcalWorkExec`)
 
-Основная функция анализа:
+The analysis logic lives in `EcalWork(...)` and is wrapped by `EcalWorkExec`.
+
+### 3.1. Analysis configuration (EcalConfig)
+
+Selection criteria are passed via a configuration struct:
 
 ```cpp
-void EcalWork(std::string inputDataTree =
-                  "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
-              std::string outputData = "hs4_133_basket5_1616162.root",
-              Long64_t firstEntry    = 0,
-              Long64_t lastEntry     = 20.e6);
+struct EcalConfig {
+  bool  transAnalysis;              // 0 = longitudinal, 1 = transverse
+  bool  useLongQA;                  // fill longitudinal QA histos
+  bool  useTransQA;                 // fill transverse QA histos
+  int   long_max_1st_Integral;      // cut on 1st hottest cell integral
+  int   long_max_2nd_Integral;      // cut on 2nd hottest cell (3x3 neighbour)
+  float long_min_3x3_ratio;         // min allowed max/(max+2nd) in 3x3
+  float long_max_3x3_ratio;         // max allowed max/(max+2nd)
+  float long_max_diffusivity_5x5;   // max (5x5−3x3)/5x5
+};
 ```
 
-Функция:
-- открывает входной ROOT-файл `inputDataTree`;
-- читает TTree `"events"` (обязательно наличие дерева с таким именем);
-- использует набор ветвей:
-  - `eventNum`
-  - `integral`
-  - `amplitude`
-  - `channelNums`
-  - `channel_Z`
-  - `channel_Phi`
-- строит события по `eventNum`, выполняет либо **продольный** (`LongAnalysis`) либо **поперечный** (`TransverseAnalysis`) отбор;
-- заполняет сводные гистограммы (амплитуды, интегралы, распределения по каналам);
-- пишет выходной ROOT-файл `outputData`:
-  - основные гистограммы (event, channel, amplitude, integral);
-  - директорию `target_channels` с гистограммами по выбранным «целевым» каналам;
-  - директорию `channel_wf` при необходимости (waveforms).
+This config is passed into:
 
-The analysis function:
-- opens the input ROOT file `inputDataTree`;
-- reads the `events` TTree (must exist in the file);
-- uses branches `eventNum`, `integral`, `amplitude`, `channelNums`, `channel_Z`, `channel_Phi`;
-- builds events by `eventNum`, applies **longitudinal** or **transverse** selection;
-- fills summary histograms and per-channel target histograms;
-- writes an output ROOT file `outputData` with analysis results.
+```cpp
+void EcalWork(std::string inputDataTree,
+              std::string outputData,
+              Long64_t firstEntry,
+              Long64_t lastEntry,
+              const EcalConfig &cfg);
+```
 
----
+Inside `EcalWork`:
+- `cfg.transAnalysis` chooses between `LongAnalysis` and `TransverseAnalysis`;
+- `cfg.useLongQA`, `cfg.useTransQA` control booking/writing of QA histograms:
+  - `longitudinal_QA` directory for long selection;
+  - `transverse_QA` directory for transverse selection;
+- the long‑analysis cuts use the numeric fields of `cfg` (no hard‑coded globals).
 
-## 4. Локальный запуск `EcalWorkExec` / Local run of `EcalWorkExec`
+### 3.2. Command-line interface: `EcalWorkExec`
 
-Исполнительный файл `EcalWorkExec` — это обёртка над `EcalWork(...)`, которая принимает аргументы командной строки:
+`EcalWorkExec` is a thin wrapper that parses CLI arguments and builds `EcalConfig`:
 
 ```bash
-./EcalWorkExec <input.root> <output.root> <firstEntry> <lastEntry>
+./EcalWorkExec \
+  <input.root> <output.root> \
+  <firstEntry> <lastEntry> \
+  <transFlag> <useLongQA> <useTransQA> \
+  <longMax1> <longMax2> <min3x3> <max3x3> <maxDiff5x5>
 ```
 
-Пример локального запуска на интерактивном узле:
+Arguments:
+
+- `<input.root>` – input file with an `events` TTree.
+- `<output.root>` – output analysis file.
+- `<firstEntry>` `<lastEntry>` – entry indices, processed range `[firstEntry, lastEntry)` (clamped to `GetEntries()`).
+- `<transFlag>` – `0` = longitudinal selection, `1` = transverse selection.
+- `<useLongQA>`, `<useTransQA>` – `1` to book/fill/write QA histograms, `0` to disable.
+- `<longMax1>` – minimum integral of the hottest cell in the event.
+- `<longMax2>` – minimum integral of the second hottest cell (within 3×3 around the max).
+- `<min3x3>`, `<max3x3>` – allowed window for ratio `max / (max + 2nd)` in 3×3.
+- `<maxDiff5x5>` – upper cut on diffusivity `(5x5−3x3)/5x5`.
+
+Example: small longitudinal run with QA enabled and tuned cuts:
 
 ```bash
 cd build
 
 ./EcalWorkExec \
   /nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root \
-  /scratch3/dflusova/ECalWork/root/test_small.root \
-  0 \
-  10000000
+  /scratch3/dflusova/ECalWork/root/test_long.root \
+  0 100000 \
+  0 1 0 3500 1500 0.75 0.99 0.25
 ```
 
-Это запустит `EcalWork` на событиях с индексами от `firstEntry` до `lastEntry` (верхняя граница автоматически ограничивается числом записей в TTree `events` внутри кода).
-
-This runs `EcalWork` on entries in the range `[firstEntry, lastEntry)` (upper bound is clamped to `tree->GetEntries()` inside the code).
+The output contains:
+- summary histograms (event, channel, amplitude, integral);
+- `target_channels` directory with per‑channel histos:
+  - longitudinal mode: “core energy” (sum of hottest + strongest neighbour);
+  - transverse mode: “target integral” of the selected strip cell;
+- optional QA directories: `longitudinal_QA` and/or `transverse_QA`.
 
 ---
 
-## 5. Запуск на кластере (SLURM job array) / Cluster run (SLURM job array)
+## 4. Physics interpretation of longitudinal cuts
 
-Для массового анализа большого ROOT-файла используется скрипт `run_script/run_EcalWork.sh`, который запускает `EcalWorkExec` как SLURM job array.
+In longitudinal mode the selection is designed to pick events where a single minimum-ionizing particle (muon) deposits energy in a well‑defined core cell, with limited spatial spread.
 
-### 5.1. Скрипт `run_EcalWork.sh`
+Conceptually:
 
-Основные элементы скрипта:
+1. **Hottest cell (1st max integral)**  
+   - This is the cell with the largest signal integral in the event.  
+   - Cut `long_max_1st_Integral` ensures the core signal is above noise / pedestal and consistent with at least ~1 MIP (exact MIP scale depends on calibration).
 
-- SLURM директивы:
+2. **Second hottest cell (3×3 neighbour)**  
+   - Among the 3×3 window around the hottest cell, the largest neighbour is the “second hottest”.  
+   - Cut `long_max_2nd_Integral` removes events where the neighbour is too small (e.g. very asymmetric energy sharing or noise).
+
+3. **3×3 ratio: `max / (max + 2nd)`**  
+   - Measures how much of the 3×3 core is carried by the central hottest cell.  
+   - High ratio → very localized core (good MIP candidate).  
+   - Low ratio → energy split between cells (possible shower or multi‑hit).  
+   - Cuts `[long_min_3x3_ratio, long_max_3x3_ratio)` define an acceptable window.
+
+4. **5×5 diffusivity: `(5x5 − 3x3) / 5x5`**  
+   - Compares energy in a 5×5 window to energy in the inner 3×3.  
+   - Small value → most energy is inside 3×3 → narrow shower, likely a single track.  
+   - Large value → a lot of energy in outer ring → diffuse or multi‑particle event.  
+   - Cut `long_max_diffusivity_5x5` rejects events with too much peripheral energy.
+
+The longitudinal “core energy” stored per channel is the sum of the hottest cell and its strongest neighbour in 3×3. This is the main observable for muon studies and calibration scans.
+
+---
+
+## 5. Cluster run (SLURM job array)
+
+For large ROOT files, use the SLURM script in `run_script`, e.g. `run_EcalWork.sh`.
+
+### 5.1. SLURM script structure (example)
+
+Key parts of the script:
 
 ```bash
+#!/bin/bash
+
 #SBATCH -p nica
 #SBATCH -J ECAL
-#SBATCH -a 0-9                 # 10 задач массива: TASK_ID = 0..9
+#SBATCH -a 0-9                 # 10 chunks: TASK_ID = 0..9
 #SBATCH -N 1
 #SBATCH -o /scratch3/dflusova/ECalWork/log/qa_%A_%a.out
 #SBATCH -e /scratch3/dflusova/ECalWork/log/qa_%A_%a.err
-```
+#SBATCH -x ncx111,ncx112,...
 
-- Инициализация окружения MPDROOT:
-
-```bash
+# Environment
 source /cvmfs/nica.jinr.ru/sw/os/login.sh latest
 module add mpddev/v24.09.24-1
 source /lhep/users/dflusova/mpdroot_polarization/mpdroot/install/config/env.sh
-```
 
-- Пути:
+export JOB_ID=${SLURM_ARRAY_JOB_ID}
+export TASK_ID=${SLURM_ARRAY_TASK_ID}
 
-```bash
+# Paths
 export BUILD_DIR=/lhep/users/dflusova/EcalWork/EcalWork/build
 export EXEC=${BUILD_DIR}/EcalWorkExec
 
@@ -181,13 +215,15 @@ export LOG_DIR=${OUT_BASE}/log
 
 export OUT_FILE=${OUT_DIR}/run_rc1-hs4_133_basket5_1616162_part${TASK_ID}.root
 export LOG=${LOG_DIR}/log_qa_run8_${JOB_ID}_${TASK_ID}.log
+
+mkdir -p "${OUT_DIR}"
+mkdir -p "${LOG_DIR}"
 ```
 
-- Разбиение по диапазонам записей (chunking):
+Chunking logic:
 
 ```bash
-# total entries in TTree "events" (задаётся вручную)
-TOTAL_ENTRIES=584947682
+TOTAL_ENTRIES=584947682    # events->GetEntries() for this input file
 
 N_CHUNKS=$(( SLURM_ARRAY_TASK_MAX - SLURM_ARRAY_TASK_MIN + 1 ))
 CHUNK_SIZE=$(( TOTAL_ENTRIES / N_CHUNKS ))
@@ -200,100 +236,108 @@ else
 fi
 ```
 
-Каждая задача массива (`TASK_ID = 0..9`) получает свой диапазон `[FIRST_ENTRY, LAST_ENTRY)` и пишет отдельный выходной ROOT-файл.
+Selection steering (example):
 
-Each array task (`TASK_ID = 0..9`) processes its own entry range `[FIRST_ENTRY, LAST_ENTRY)` and writes a separate output ROOT file.
+```bash
+TRANS_FLAG=0       # 0 = longitudinal, 1 = transverse
+USE_LONG_QA=1
+USE_TRANS_QA=0
 
-- Запуск:
+LONG_MAX1=3500
+LONG_MAX2=1500
+MIN3X3=0.75
+MAX3X3=0.99
+MAXDIFF5X5=0.25
+```
+
+Run:
 
 ```bash
 cd "${BUILD_DIR}"
 
-"${EXEC}" "${INPUT_FILE}" "${OUT_FILE}" ${FIRST_ENTRY} ${LAST_ENTRY} &>> "${LOG}"
+"${EXEC}" "${INPUT_FILE}" "${OUT_FILE}" ${FIRST_ENTRY} ${LAST_ENTRY} \
+          ${TRANS_FLAG} ${USE_LONG_QA} ${USE_TRANS_QA} \
+          ${LONG_MAX1} ${LONG_MAX2} ${MIN3X3} ${MAX3X3} ${MAXDIFF5X5} &>> "${LOG}"
 
 echo "Job is finished" &>> "${LOG}"
 ```
 
-### 5.2. Подготовка и отправка / Submission
+Each array task (`TASK_ID = 0..9`) processes its own entry range and writes one ROOT and one log file.
 
-1. Убедитесь, что:
-   - `EcalWorkExec` собран и доступен в `${BUILD_DIR}`;
-   - путь к входному файлу `INPUT_FILE` правильный;
-   - значение `TOTAL_ENTRIES` соответствует `events->GetEntries()` для данного входного файла (его нужно обновлять вручную при смене файла).
+### 5.2. Human-readable analysis summary per job
 
-2. Отправка job array:
+The script can also write a small text file describing the configuration, e.g.:
 
 ```bash
-cd run_script
-sbatch run_EcalWork.sh
-```
+SUMMARY_FILE=${OUT_DIR}/technical_notes_about_jobs/analysis_summary_part${TASK_ID}.txt
 
-SLURM создаст 10 задач, каждая обработает свою часть TTree и положит результат в:
-`$OUT_DIR/run_rc1-hs4_133_basket5_1616162_part<TASK_ID>.root`.
+{
+  echo "=== ECal cosmic analysis summary ==="
+  echo ""
+  echo "Date/time:        $(date)"
+  echo "Node:             ${SLURMD_NODENAME}"
+  echo "Job ID:           ${JOB_ID}"
+  echo "Task ID:          ${TASK_ID}"
+  echo ""
+  echo "Input file:       ${INPUT_FILE}"
+  echo "Output file:      ${OUT_FILE}"
+  echo ""
+  echo "Total entries:    ${TOTAL_ENTRIES}"
+  echo "Entry range:      [${FIRST_ENTRY}, ${LAST_ENTRY})"
+  echo ""
+  if [ "${TRANS_FLAG}" -eq 0 ]; then
+    echo "Analysis mode:    Longitudinal selection"
+  else
+    echo "Analysis mode:    Transverse selection"
+  fi
+  echo ""
+  echo "QA histograms:"
+  echo "  Longitudinal QA: $( [ "${USE_LONG_QA}" -eq 1 ] && echo ENABLED || echo disabled )"
+  echo "  Transverse QA:   $( [ "${USE_TRANS_QA}" -eq 1 ] && echo ENABLED || echo disabled )"
+  echo ""
+  echo "Selection cuts (longitudinal core if used):"
+  echo "  1st hottest cell integral (ADC):           > ${LONG_MAX1}"
+  echo "  2nd hottest cell integral in 3x3 (ADC):    > ${LONG_MAX2}"
+  echo "  3x3 ratio = max / (max + 2nd):             [${MIN3X3}, ${MAX3X3})"
+  echo "  Diffusivity = (5x5 - 3x3) / 5x5:           < ${MAXDIFF5X5}"
+  echo ""
+  echo "Notes:"
+  echo "  - \"hottest cell\" = cell with maximum integral in event."
+  echo "  - \"second hottest\" = largest neighbour in 3×3 window."
+  echo "  - Longitudinal QA histos live in 'longitudinal_QA' in the ROOT file."
+  echo "  - Transverse QA histos live in 'transverse_QA' in the ROOT file."
+} > "${SUMMARY_FILE}"
+```
 
 ---
 
-## 6. Объединение выходных файлов / Merging output ROOT files
+## 6. Merging output ROOT files
 
-После завершения job array вы получите набор файлов:
+After the array finishes, you have:
 
 ```text
 run_rc1-hs4_133_basket5_1616162_part0.root
-run_rc1-hs4_133_basket5_1616162_part1.root
 ...
 run_rc1-hs4_133_basket5_1616162_part9.root
 ```
 
-Возможные стратегии:
-- анализ каждого файла отдельно (например, по задачам/чанкам);
-- объединение гистограмм через ROOT (`hadd` или ручной merge).
-
-Пример с `hadd`:
+You can merge histograms with `hadd`:
 
 ```bash
 hadd -f run_rc1-hs4_133_basket5_1616162_all.root \
      run_rc1-hs4_133_basket5_1616162_part*.root
 ```
 
-Или более аккуратный merge через собственный ROOT-скрипт, если структура выходных файлов сложнее (несколько директорий, дополнительные TTree и т.п.).
+or use a custom ROOT script if you need more control over directories.
 
 ---
 
-## 7. Режимы анализа / Analysis modes
+## 7. Requirements
 
-Переключение между **продольным** и **поперечным** анализом контролируется глобальной логикой в `EcalWork.cpp` (флаг `TransverAnalysis` и соответствующие функции `LongAnalysis` / `TransverseAnalysis`).
-
-Основные принципы:
-- Longitudinal mode:
-  - поиск самой «горячей» ячейки и её ближайшего соседа (3×3 окно);
-  - расчёт энергии в 5×5 окне вокруг hottest cell;
-  - различие между «core» и «diffuse» энергией (ratio);
-  - строгие cuts по интегралу, положениям по Z/Phi, отношению энергий.
-
-- Transverse mode:
-  - поиск стрипов по Z или Phi с последовательными ячейками;
-  - отбор событий с достаточной длиной стрипа и малой контаминацией;
-  - выбор целевой ячейки в стрипе и заполнение гистограмм.
-
-Все детали реализованы в `LongAnalysis(...)` и `TransverseAnalysis(...)` в `EcalWork.cpp`. При модификации критериев отбора или порогов (например, `gl_long_max_1st_Integral`, `gl_long_max_3x3_ratio`) эти значения нужно менять в исходнике.
-
----
-
-## 8. Требования / Requirements
-
-- ROOT 6.x
+- ROOT 6
 - C++17
-- MPDROOT environment (модули и env-файл, как показано в `run_EcalWork.sh`)
-- SLURM для запуска на кластере (если используете job array)
-
----
-
-## 9. Краткое резюме / Short summary
-
-1. Сначала конвертируете бинарный `.data` → ROOT TTree `events` с `ConvertToRoot(...)`.
-2. Затем анализируете TTree с `EcalWork(...)`:
-   - локально: `./EcalWorkExec input.root output.root firstEntry lastEntry`;
-   - на кластере: `sbatch run_script/run_EcalWork.sh` с job array и разбиением на чанки.
-3. Объединяете или анализируете выходные ROOT-файлы по необходимости.
-
-First, convert `.data` to a ROOT `events` TTree with `ConvertToRoot(...)`, then run `EcalWork(...)` (via `EcalWorkExec`) locally or as a SLURM job array, and finally inspect or merge the per-chunk output ROOT files as needed.
+- MPDROOT environment (e.g.):
+  - `source /cvmfs/nica.jinr.ru/sw/os/login.sh latest`
+  - `module add mpddev/v24.09.24-1`
+  - `source /lhep/users/dflusova/mpdroot_polarization/mpdroot/install/config/env.sh`
+- SLURM for cluster runs (if using job arrays).

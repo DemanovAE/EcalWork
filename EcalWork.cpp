@@ -15,6 +15,7 @@
 #include "Rtypes.h"
 #include "RtypesCore.h"
 #include "TCanvas.h"
+#include "TDirectory.h"
 #include "TF1.h"
 #include "TFile.h"
 #include "TGraph.h"
@@ -44,17 +45,229 @@ constexpr int MAX_CH = 65;
 const int MAX_Z = 65;
 const int MAX_PHI = 12;
 
+// bool UseLongQA = true;
+// bool UseTransQA = false;
+
 bool SetBinNameCutHisto = true;
 
-// For Long Analysis
-bool TransverAnalysis = false;
-const int gl_long_max_1st_Integral = 1000;
-const int gl_long_max_2nd_Integral = 200;
-const float gl_long_min_3x3_ratio = 0.70;       // dummy value
-const float gl_long_max_3x3_ratio = 0.99;       // dummy value
-const float gl_long_max_diffusivity_5x5 = 0.45; // dummy value, tune from data
+struct EcalConfig {
+  bool  transAnalysis;
+  bool  useLongQA;
+  bool  useTransQA;
+  int   long_max_1st_Integral;
+  int   long_max_2nd_Integral;
+  float long_min_3x3_ratio;
+  float long_max_3x3_ratio;
+  float long_max_diffusivity_5x5;
+};
 
 // For Trans Analysis
+struct LongSelHists {
+  TH1D *hCutFlow = nullptr;
+
+  TH1F *hMaxInt_all = nullptr;
+  TH1F *hMaxInt_pass = nullptr;
+
+  TH1F *hSecondInt_all = nullptr;
+  TH1F *hSecondInt_pass = nullptr;
+
+  TH1F *hRatio3x3_all = nullptr;
+  TH1F *hRatio3x3_pass = nullptr;
+
+  TH1F *hDiff5x5_all = nullptr;
+  TH1F *hDiff5x5_pass = nullptr;
+
+  TH2F *hRatio3x3_vs_max_all = nullptr;
+  TH2F *hDiff5x5_vs_core_all = nullptr;
+};
+
+struct TransSelHists {
+  TH1D *hCutFlow = nullptr;
+
+  TH1F *hNamp100_all = nullptr;
+  TH1F *hNamp100_pass = nullptr;
+
+  TH1F *hAmp_all = nullptr;
+  TH1F *hAmp_pass = nullptr;
+
+  TH1F *hStripLen_all = nullptr;
+  TH1F *hStripLen_pass = nullptr;
+
+  TH1F *hTargetIntegral_all = nullptr;
+  TH1F *hTargetIntegral_pass = nullptr;
+
+  TH1F *hContamCount_all = nullptr;
+  TH1F *hContamCount_pass = nullptr;
+};
+
+inline void FillIf(TH1 *h, double x) {
+  if (h)
+    h->Fill(x);
+}
+
+inline void FillIf(TH2 *h, double x, double y) {
+  if (h)
+    h->Fill(x, y);
+}
+
+LongSelHists BookLongSelHists(TDirectory *dir) {
+  LongSelHists h;
+  if (!dir)
+    return h;
+  dir->cd();
+
+  h.hCutFlow = new TH1D(
+      "hLongCutFlow", "Longitudinal selection cut flow;;Events", 10, -0.5, 9.5);
+  h.hCutFlow->GetXaxis()->SetBinLabel(1, "entered");
+  h.hCutFlow->GetXaxis()->SetBinLabel(2, "non-empty");
+  h.hCutFlow->GetXaxis()->SetBinLabel(3, "1st max");
+  h.hCutFlow->GetXaxis()->SetBinLabel(4, "phi edge");
+  h.hCutFlow->GetXaxis()->SetBinLabel(5, "z edge");
+  h.hCutFlow->GetXaxis()->SetBinLabel(6, "3x3 ratio");
+  h.hCutFlow->GetXaxis()->SetBinLabel(7, "2nd max");
+  h.hCutFlow->GetXaxis()->SetBinLabel(8, "5x5 diff");
+
+  h.hMaxInt_all =
+      new TH1F("hMaxInt_all", "1st max integral before cut;Integral;Events",
+               200, 0, 20000);
+  h.hMaxInt_pass =
+      new TH1F("hMaxInt_pass", "1st max integral after cut;Integral;Events",
+               200, 0, 20000);
+
+  h.hSecondInt_all =
+      new TH1F("hSecondInt_all", "2nd max in 3x3 before cut;Integral;Events",
+               200, 0, 5000);
+  h.hSecondInt_pass =
+      new TH1F("hSecondInt_pass", "2nd max in 3x3 after cut;Integral;Events",
+               200, 0, 5000);
+
+  h.hRatio3x3_all = new TH1F(
+      "hRatio3x3_all", "max/(max+2nd) before cut;Ratio;Events", 100, 0.0, 1.0);
+  h.hRatio3x3_pass = new TH1F(
+      "hRatio3x3_pass", "max/(max+2nd) after cut;Ratio;Events", 100, 0.0, 1.0);
+
+  h.hDiff5x5_all = new TH1F(
+      "hDiff5x5_all", "(5x5-3x3)/(5x5) before cut;Ratio;Events", 100, 0.0, 1.0);
+  h.hDiff5x5_pass = new TH1F(
+      "hDiff5x5_pass", "(5x5-3x3)/(5x5) after cut;Ratio;Events", 100, 0.0, 1.0);
+
+  h.hRatio3x3_vs_max_all = new TH2F(
+      "hRatio3x3_vs_max_all", "ratio3x3 vs 1st max;1st max integral;ratio3x3",
+      120, 0, 20000, 100, 0.0, 1.0);
+
+  h.hDiff5x5_vs_core_all =
+      new TH2F("hDiff5x5_vs_core_all",
+               "diffusivity vs core energy;core energy;diffusivity", 120, 0,
+               30000, 100, 0.0, 1.0);
+
+  return h;
+}
+
+TransSelHists BookTransSelHists(TDirectory *dir) {
+  TransSelHists h;
+  if (!dir)
+    return h;
+  dir->cd();
+
+  h.hCutFlow = new TH1D("hTransCutFlow",
+                        "Transverse selection cut flow;;Events", 10, -0.5, 9.5);
+  h.hCutFlow->GetXaxis()->SetBinLabel(1, "entered");
+  h.hCutFlow->GetXaxis()->SetBinLabel(2, "amp>thr");
+  h.hCutFlow->GetXaxis()->SetBinLabel(3, "N>=5");
+  h.hCutFlow->GetXaxis()->SetBinLabel(4, "strip found");
+  h.hCutFlow->GetXaxis()->SetBinLabel(5, "contam");
+  h.hCutFlow->GetXaxis()->SetBinLabel(6, "target found");
+
+  h.hNamp100_all = new TH1F(
+      "hNamp100_all", "N channels with amp>threshold before cuts;N;Events", 70,
+      -0.5, 69.5);
+  h.hNamp100_pass = new TH1F(
+      "hNamp100_pass", "N channels with amp>threshold after N>=5;N;Events", 70,
+      -0.5, 69.5);
+
+  h.hAmp_all = new TH1F(
+      "hAmp_all", "Channel amplitude entering transverse;Amplitude;Counts", 200,
+      0, 5000);
+  h.hAmp_pass =
+      new TH1F("hAmp_pass", "Channel amplitude after amp cut;Amplitude;Counts",
+               200, 0, 5000);
+
+  h.hStripLen_all = new TH1F(
+      "hStripLen_all", "Found strip length before strip cut;Length;Events", 20,
+      -0.5, 19.5);
+  h.hStripLen_pass =
+      new TH1F("hStripLen_pass", "Found strip length accepted;Length;Events",
+               20, -0.5, 19.5);
+
+  h.hTargetIntegral_all = new TH1F(
+      "hTargetIntegral_all",
+      "Target integral before final accept;Integral;Events", 200, 0, 15000);
+  h.hTargetIntegral_pass =
+      new TH1F("hTargetIntegral_pass",
+               "Target integral accepted;Integral;Events", 200, 0, 15000);
+
+  h.hContamCount_all = new TH1F(
+      "hContamCount_all", "Nearby contamination count before cut;N;Events", 20,
+      -0.5, 19.5);
+  h.hContamCount_pass =
+      new TH1F("hContamCount_pass",
+               "Nearby contamination count accepted;N;Events", 20, -0.5, 19.5);
+
+  return h;
+}
+void WriteLongSelHists(const LongSelHists *h) {
+  if (!h)
+    return;
+  if (h->hCutFlow)
+    h->hCutFlow->Write();
+  if (h->hMaxInt_all)
+    h->hMaxInt_all->Write();
+  if (h->hMaxInt_pass)
+    h->hMaxInt_pass->Write();
+  if (h->hSecondInt_all)
+    h->hSecondInt_all->Write();
+  if (h->hSecondInt_pass)
+    h->hSecondInt_pass->Write();
+  if (h->hRatio3x3_all)
+    h->hRatio3x3_all->Write();
+  if (h->hRatio3x3_pass)
+    h->hRatio3x3_pass->Write();
+  if (h->hDiff5x5_all)
+    h->hDiff5x5_all->Write();
+  if (h->hDiff5x5_pass)
+    h->hDiff5x5_pass->Write();
+  if (h->hRatio3x3_vs_max_all)
+    h->hRatio3x3_vs_max_all->Write();
+  if (h->hDiff5x5_vs_core_all)
+    h->hDiff5x5_vs_core_all->Write();
+}
+
+void WriteTransSelHists(const TransSelHists *h) {
+  if (!h)
+    return;
+  if (h->hCutFlow)
+    h->hCutFlow->Write();
+  if (h->hNamp100_all)
+    h->hNamp100_all->Write();
+  if (h->hNamp100_pass)
+    h->hNamp100_pass->Write();
+  if (h->hAmp_all)
+    h->hAmp_all->Write();
+  if (h->hAmp_pass)
+    h->hAmp_pass->Write();
+  if (h->hStripLen_all)
+    h->hStripLen_all->Write();
+  if (h->hStripLen_pass)
+    h->hStripLen_pass->Write();
+  if (h->hTargetIntegral_all)
+    h->hTargetIntegral_all->Write();
+  if (h->hTargetIntegral_pass)
+    h->hTargetIntegral_pass->Write();
+  if (h->hContamCount_all)
+    h->hContamCount_all->Write();
+  if (h->hContamCount_pass)
+    h->hContamCount_pass->Write();
+}
 
 template <typename T>
 void SetWaveformHistogram(const std::vector<T> &data, TH1F *hist,
@@ -282,21 +495,26 @@ bool FindTargetChannelInStrip(const std::vector<ChannelData> &strip,
   return false;
 }
 
+// bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
+//                         std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
 bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
-                        std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
+                        std::vector<TH1F *> h_int_per_channel, TH1D *hCut,
+                        TransSelHists *hs = nullptr) {
   std::vector<int> _PhiCount(12);
   std::vector<int> _ZCount(64);
   std::vector<ChannelData> data;
   data.reserve(eventCh.size());
+  // FillIf(hs ? hs->hCutFlow : nullptr, 0);
 
   const double threshold_1 = 100.0;
   const double threshold_2 = 500.0;
 
   for (int i = 0; i < eventCh.size(); i++) {
-
+    FillIf(hs ? hs->hAmp_all : nullptr, eventCh[i].amplitude);
     if (eventCh[i].amplitude < threshold_1)
       continue; // apm < 100 is a basic selection fro all channels in event
     hCut->Fill(2);
+    FillIf(hs ? hs->hAmp_pass : nullptr, eventCh[i].amplitude);
 
     data.push_back(eventCh[i]); // we have got the 'target' channels in event
     _PhiCount[eventCh[i].channel_Phi -
@@ -304,12 +522,14 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
     _ZCount[eventCh[i].channel_Z -
             1]++; // count the number of Z triggered cells in event
   }
-
+  FillIf(hs ? hs->hNamp100_all : nullptr, data.size());
   if (data.size() < 5) { // if there are less tna five channels (doesn't
                          // matter which ones), then reject the event
     eventCh.clear();
     return false;
   }
+  FillIf(hs ? hs->hNamp100_pass : nullptr, data.size());
+  FillIf(hs ? hs->hCutFlow : nullptr, 1);
   hCut->Fill(3, data.size());
 
   std::vector<int> phiStrip, zStrip;
@@ -319,6 +539,9 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
       FindOneStrip(data, phiStrip, phiStripOuter, true, threshold_2, 5);
   bool hasZStrip =
       FindOneStrip(data, zStrip, zStripOuter, false, threshold_2, 5);
+  FillIf(hs ? hs->hStripLen_all : nullptr,
+         hasPhiStrip ? (int)phiStrip.size()
+                     : (hasZStrip ? (int)zStrip.size() : 0));
 
   bool accepted = false;
   std::vector<ChannelData> filteredData;
@@ -333,6 +556,8 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
         filteredData.push_back(ch);
     }
   }
+  FillIf(hs ? hs->hStripLen_pass : nullptr, filteredData.size());
+  FillIf(hs ? hs->hCutFlow : nullptr, 2);
 
   if (hasZStrip && !accepted) {
     accepted = true;
@@ -370,6 +595,10 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
       return false;
     }
   }
+
+  // FillIf(hs ? hs->hContamCount_pass : nullptr, contaminationCount);
+  FillIf(hs ? hs->hCutFlow : nullptr, 3);
+
   hCut->Fill(5, data.size());
 
   for (int i = 0; i < data.size(); i++) {
@@ -400,11 +629,16 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
     hasTarget = FindTargetChannelInStrip(filteredData, false, threshold_2,
                                          targetChannel);
   }
+  if (hasTarget)
+    FillIf(hs ? hs->hTargetIntegral_all : nullptr, targetChannel.integral);
 
   if (!hasTarget) {
     eventCh.clear();
     return false;
   }
+
+  FillIf(hs ? hs->hTargetIntegral_pass : nullptr, targetChannel.integral);
+  FillIf(hs ? hs->hCutFlow : nullptr, 4);
 
   eventCh.clear();
   // eventCh = std::move(data);
@@ -487,11 +721,13 @@ bool CalcAreaFiveOnFiveWindow(std::vector<ChannelData> &data,
 }
 
 bool LongAnalysis(std::vector<ChannelData> &eventCh,
-                  std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
+                  std::vector<TH1F *> h_int_per_channel, const EcalConfig &cfg,
+                  TH1D *hCut, LongSelHists *hs = nullptr) {
 
   std::vector<ChannelData> data;
   data.reserve(eventCh.size());
   int itMax2 = -1;
+  FillIf(hs ? hs->hCutFlow : nullptr, 0);
 
   for (int i = 0; i < eventCh.size(); i++) {
     // if (eventCh[i].amplitude < 200)
@@ -510,6 +746,8 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
     return false; // nothing passed cuts, no maximum
 
   hCut->Fill(3, data.size());
+  FillIf(hs ? hs->hCutFlow : nullptr, 1);
+
   if (SetBinNameCutHisto)
     hCut->GetXaxis()->SetBinLabel(4, "empty event");
 
@@ -524,22 +762,24 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
 
   const ChannelData &maxCell = data[itMax];
   float adc_max = maxCell.integral;
-  // float adc_max_2;
 
-  if (adc_max < gl_long_max_1st_Integral)
+  FillIf(hs ? hs->hMaxInt_all : nullptr, adc_max);
+
+  if (adc_max < cfg.long_max_1st_Integral)
     return false;
+
+  FillIf(hs ? hs->hMaxInt_pass : nullptr, adc_max);
+  FillIf(hs ? hs->hCutFlow : nullptr, 2);
 
   hCut->Fill(4, data.size());
   if (SetBinNameCutHisto)
     hCut->GetXaxis()->SetBinLabel(
-        5, Form("1stMaxInt>%i", gl_long_max_1st_Integral));
+        5, Form("1stMaxInt>%i", cfg.long_max_1st_Integral));
 
   if (maxCell.channel_Phi == 1 || maxCell.channel_Phi == 12)
     return false;
 
-  // Need full 5x5 around hottest cell
-  // if (maxCell.channel_Phi <= 2 || maxCell.channel_Phi >= 11)
-  //   return false;
+  FillIf(hs ? hs->hCutFlow : nullptr, 3);
 
   hCut->Fill(5, data.size());
   if (SetBinNameCutHisto)
@@ -548,8 +788,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   if (maxCell.channel_Z == 1 || maxCell.channel_Z == 64)
     return false;
 
-  // if (maxCell.channel_Z <= 2 || maxCell.channel_Z >= 63)
-  //   return false;
+  FillIf(hs ? hs->hCutFlow : nullptr, 4);
 
   hCut->Fill(6, data.size());
   if (SetBinNameCutHisto)
@@ -560,36 +799,54 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   if (!CheckThreeOnThreeWindow(data, maxCell, secMaxCell, itMax2, ratio_3x3))
     return false;
 
-  if (ratio_3x3 >= gl_long_max_3x3_ratio || ratio_3x3 < gl_long_min_3x3_ratio)
+  FillIf(hs ? hs->hSecondInt_all : nullptr, secMaxCell.integral);
+  FillIf(hs ? hs->hRatio3x3_all : nullptr, ratio_3x3);
+  FillIf(hs ? hs->hRatio3x3_vs_max_all : nullptr, adc_max, ratio_3x3);
+
+  if (ratio_3x3 >= cfg.long_max_3x3_ratio || ratio_3x3 < cfg.long_min_3x3_ratio)
     return false;
+
+  FillIf(hs ? hs->hRatio3x3_pass : nullptr, ratio_3x3);
+  FillIf(hs ? hs->hCutFlow : nullptr, 5);
 
   hCut->Fill(7, data.size());
   if (SetBinNameCutHisto)
     hCut->GetXaxis()->SetBinLabel(
-        8, Form("1st/(1st+2nd)>%.2f", gl_long_min_3x3_ratio));
+        8, Form("1st/(1st+2nd)>%.2f", cfg.long_min_3x3_ratio));
 
   float MaxIntegral_2st = secMaxCell.integral;
-  if (MaxIntegral_2st < gl_long_max_2nd_Integral)
+  if (MaxIntegral_2st < cfg.long_max_2nd_Integral)
     return false;
+
+  FillIf(hs ? hs->hSecondInt_pass : nullptr, MaxIntegral_2st);
+  FillIf(hs ? hs->hCutFlow : nullptr, 6);
 
   hCut->Fill(8, data.size());
   if (SetBinNameCutHisto)
     hCut->GetXaxis()->SetBinLabel(
-        9, Form("2ndMaxInt>%i", gl_long_max_2nd_Integral));
+        9, Form("2ndMaxInt>%i", cfg.long_max_2nd_Integral));
 
   float sum5x5, sum3x3, ratio_cut5x5;
 
   if (!CalcAreaFiveOnFiveWindow(data, maxCell, sum5x5, sum3x3, ratio_cut5x5))
     return false;
 
-  if (ratio_cut5x5 > gl_long_max_diffusivity_5x5)
+  const float coreEnergy = maxCell.integral + secMaxCell.integral;
+
+  FillIf(hs ? hs->hDiff5x5_all : nullptr, ratio_cut5x5);
+  FillIf(hs ? hs->hDiff5x5_vs_core_all : nullptr, coreEnergy, ratio_cut5x5);
+
+  if (ratio_cut5x5 > cfg.long_max_diffusivity_5x5)
     return false;
   hCut->Fill(9, data.size());
   if (SetBinNameCutHisto) {
     hCut->GetXaxis()->SetBinLabel(
-        10, Form("(5x5)/(3x3+5x5)<%.2f", gl_long_max_diffusivity_5x5));
+        10, Form("(5x5)/(3x3+5x5)<%.2f", cfg.long_max_diffusivity_5x5));
     SetBinNameCutHisto = false;
   }
+
+  FillIf(hs ? hs->hDiff5x5_pass : nullptr, ratio_cut5x5);
+  FillIf(hs ? hs->hCutFlow : nullptr, 7);
 
   // Fill target channels directly
   // int ch_max = maxCell.channelNums;
@@ -604,7 +861,6 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   // }
 
   // Longitudinal observable: sum of hottest and strongest neighbour
-  const float coreEnergy = maxCell.integral + secMaxCell.integral;
 
   // Store in histogram of the hottest channel
   const int ch_core = maxCell.channelNums;
@@ -638,33 +894,40 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   return true;
 }
 
-// void EcalWork(std::string inputDataTree =
-// "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
-//               std::string outputData = "hs4_133_basket5_1616162.root") {
+// void EcalWork(
+//     std::string inputDataTree =
+//         "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
+//     std::string outputData = "hs4_133_basket5_1616162.root",
+//     Long64_t firstEntry = 0, Long64_t lastEntry = 20.e6, const EcalConfig &cfg) {
 
-void EcalWork(
-    std::string inputDataTree =
-        "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
-    std::string outputData = "hs4_133_basket5_1616162.root",
-    Long64_t firstEntry = 0, Long64_t lastEntry = 20.e6) {
+void EcalWork(std::string inputDataTree,
+              std::string outputData,
+              Long64_t firstEntry,
+              Long64_t lastEntry,
+              const EcalConfig &cfg){
+
   TStopwatch timer1;
   timer1.Start();
 
   // Per-channel histograms for target-cell integral / core energy
   std::vector<TH1F *> h_int_per_channel;
   h_int_per_channel.reserve(NCHANNELS);
+  // for (int i = 0; i < NCHANNELS; ++i) {
+  //   h_int_per_channel.push_back(
+  //       new TH1F(Form("h_int_ch_%d", i + 1),
+  //                Form("Integral channel %d;Integral;Entries", i + 1), 100, 0,
+  //                cfg.transAnalysis == true ? 15000 : 1.e5));
+  // }
   for (int i = 0; i < NCHANNELS; ++i) {
+    const char* hname = Form("h_int_ch_%d", i + 1);
+  
+    const char* htitle = cfg.transAnalysis
+        ? Form("Target integral channel %d;Integral;Entries", i + 1)
+        : Form("Core energy (1st+2nd) channel %d;Core energy;Entries", i + 1);
+  
     h_int_per_channel.push_back(
-        new TH1F(Form("h_int_ch_%d", i + 1),
-                 Form("Integral channel %d;Integral;Entries", i + 1), 100, 0,
-                 TransverAnalysis == true ? 15000 : 1.e5));
+        new TH1F(hname, htitle, 100, 0, cfg.transAnalysis ? 15000 : 1.e5));
   }
-
-  // Output file
-  // TFile *outFile =
-  // new TFile(Form("%s_%s", TransverAnalysis == true ? "trans" : "long",
-  //         outputData.c_str()),
-  //     "RECREATE");
 
   // Use outputData exactly as given (full path from script)
   TFile *outFile = new TFile(outputData.c_str(), "RECREATE");
@@ -729,9 +992,9 @@ void EcalWork(
   TH1D *h1_chZ = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
   TH1D *h1_chPhi = new TH1D("channel_Phi", ";Phi;count", 12, 0.5, 12.5);
   TH1D *h1_chAmp = new TH1D("channel_amplitude", ";Amp;count", 100, 0,
-                            TransverAnalysis == true ? 10000 : 30000);
+                            cfg.transAnalysis == true ? 10000 : 30000);
   TH1D *h1_chInt = new TH1D("channel_integral", ";Amp;count", 500, 0,
-                            TransverAnalysis == true ? 15000 : 1.e5);
+                            cfg.transAnalysis == true ? 15000 : 1.e5);
 
   // Pictures directory
   std::filesystem::path outRootPath(outputData);
@@ -741,7 +1004,7 @@ void EcalWork(
   }
 
   std::filesystem::path pictDir =
-      outDir / "pict" / (TransverAnalysis ? "transverse" : "longitudinal");
+      outDir / "pict" / (cfg.transAnalysis ? "transverse" : "longitudinal");
   std::filesystem::create_directories(pictDir);
   gSystem->ChangeDirectory(pictDir.string().c_str());
   std::cout << "Pictures will be saved under: " << pictDir << std::endl;
@@ -749,6 +1012,24 @@ void EcalWork(
   // WF directory (kept for consistency, though not used now)
   TDirectory *WfDir = outFile->mkdir("channel_wf");
   WfDir->cd();
+
+  LongSelHists longHsLocal;
+  TransSelHists transHsLocal;
+  LongSelHists *pLongHs = nullptr;
+  TransSelHists *pTransHs = nullptr;
+
+  outFile->cd();
+  if (!cfg.transAnalysis && cfg.useLongQA) {
+    TDirectory *dirLongQA = outFile->mkdir("longitudinal_QA");
+    longHsLocal = BookLongSelHists(dirLongQA);
+    pLongHs = &longHsLocal;
+  }
+
+  if (cfg.transAnalysis && cfg.useTransQA) {
+    TDirectory *dirTransQA = outFile->mkdir("transverse_QA");
+    transHsLocal = BookTransSelHists(dirTransQA);
+    pTransHs = &transHsLocal;
+  }
 
   // Per-event handling
   UInt_t currentEventNum = 0;
@@ -787,12 +1068,15 @@ void EcalWork(
 
         bool KeyChData = false;
 
-        if (TransverAnalysis) {
+        if (cfg.transAnalysis) {
           KeyChData = TransverseAnalysis(ChannelDataInEvent, h_int_per_channel,
-                                         h_CountCut);
+                                         h_CountCut, pTransHs);
         } else {
-          KeyChData =
-              LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+          KeyChData = LongAnalysis(ChannelDataInEvent,
+                                  h_int_per_channel,
+                                  cfg,
+                                  h_CountCut,
+                                  pLongHs);
         }
 
         if (KeyChData) {
@@ -817,12 +1101,16 @@ void EcalWork(
   if (!ChannelDataInEvent.empty() && ChannelDataInEvent.size() <= MAX_CH) {
     bool KeyChData = false;
 
-    if (TransverAnalysis) {
+    if (cfg.transAnalysis) {
       KeyChData =
           TransverseAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
     } else {
       KeyChData =
-          LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+          KeyChData = LongAnalysis(ChannelDataInEvent,
+                         h_int_per_channel,
+                         cfg,
+                         h_CountCut,
+                         pLongHs);
     }
 
     if (KeyChData) {
@@ -839,6 +1127,25 @@ void EcalWork(
 
   // Write basic histograms
   outFile->cd();
+
+  if (pLongHs) {
+    TDirectory *dirLongQA = (TDirectory *)outFile->Get("longitudinal_QA");
+    if (dirLongQA) {
+      dirLongQA->cd();
+      WriteLongSelHists(pLongHs);
+    }
+    outFile->cd();
+  }
+
+  if (pTransHs) {
+    TDirectory *dirTransQA = (TDirectory *)outFile->Get("transverse_QA");
+    if (dirTransQA) {
+      dirTransQA->cd();
+      WriteTransSelHists(pTransHs);
+    }
+    outFile->cd();
+  }
+
   h1_evNum->Write();
   h_CountCut->Write();
   h1_chAmp->Write();

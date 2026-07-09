@@ -14,21 +14,17 @@ source /cvmfs/nica.jinr.ru/sw/os/login.sh latest
 module add mpddev/v24.09.24-1
 source /lhep/users/dflusova/mpdroot_polarization/mpdroot/install/config/env.sh
 
-
 export JOB_ID=${SLURM_ARRAY_JOB_ID}
 export TASK_ID=${SLURM_ARRAY_TASK_ID}
 
 # --- Paths -------------------------------------------------------------------
 
-# Build directory where EcalWorkExec lives
 export BUILD_DIR=/lhep/users/dflusova/EcalWork/EcalWork/build
 export EXEC=${BUILD_DIR}/EcalWorkExec
 
-# Input ROOT file (single TTree, same for all tasks)
 export INPUT_DIR=/nica/mpd1/demanov/ecal_mpd
 export INPUT_FILE=${INPUT_DIR}/run_rc1-hs4_133_basket5_1616162.root
 
-# Scratch for outputs/logs
 export OUT_BASE=/scratch3/dflusova/ECalWork
 export OUT_DIR=${OUT_BASE}/root
 export LOG_DIR=${OUT_BASE}/log
@@ -39,8 +35,8 @@ export LOG=${LOG_DIR}/log_qa_run8_${JOB_ID}_${TASK_ID}.log
 mkdir -p "${OUT_DIR}"
 mkdir -p "${LOG_DIR}"
 
-# --- Define total entries and chunking ---------------------------------------
-# IMPORTANT: set TOTAL_ENTRIES to the true GetEntries() of TTree "events"
+# --- Define total entries and chunking --------------------------------------
+
 TOTAL_ENTRIES=584947682      # from your log
 
 N_CHUNKS=$(( SLURM_ARRAY_TASK_MAX - SLURM_ARRAY_TASK_MIN + 1 ))
@@ -53,21 +49,87 @@ else
   LAST_ENTRY=$(( (TASK_ID + 1) * CHUNK_SIZE ))
 fi
 
+# --- Selection criteria (steering) ------------------------------------------
+
+# 0 = longitudinal analysis, 1 = transverse analysis
+TRANS_FLAG=0
+
+# Use QA histos for long / trans (1 = yes, 0 = no)
+USE_LONG_QA=1
+USE_TRANS_QA=0
+
+LONG_MAX1=3500
+LONG_MAX2=1500
+MIN3X3=0.75
+MAX3X3=0.99
+MAXDIFF5X5=0.25
+
 # --- Logging -----------------------------------------------------------------
 
-echo "Node name: ${SLURMD_NODENAME}"                                   &>> "${LOG}"
-echo "INFILE:    ${INPUT_FILE}"                                        &>> "${LOG}"
-echo "Job Id:    ${JOB_ID}"                                            &>> "${LOG}"
-echo "Task Id:   ${TASK_ID}"                                           &>> "${LOG}"
-echo "OUTFILE:   ${OUT_FILE}"                                          &>> "${LOG}"
-echo "Entries:   total=${TOTAL_ENTRIES}"                               &>> "${LOG}"
-echo "This task: firstEntry=${FIRST_ENTRY} lastEntry=${LAST_ENTRY}"    &>> "${LOG}"
-echo "EXEC:      ${EXEC}"                                              &>> "${LOG}"
+echo "Node name:      ${SLURMD_NODENAME}"                                 &>> "${LOG}"
+echo "INFILE:         ${INPUT_FILE}"                                      &>> "${LOG}"
+echo "Job Id:         ${JOB_ID}"                                          &>> "${LOG}"
+echo "Task Id:        ${TASK_ID}"                                         &>> "${LOG}"
+echo "OUTFILE:        ${OUT_FILE}"                                        &>> "${LOG}"
+echo "Entries total:  ${TOTAL_ENTRIES}"                                   &>> "${LOG}"
+echo "Entry range:    first=${FIRST_ENTRY} last=${LAST_ENTRY}"           &>> "${LOG}"
+echo "EXEC:           ${EXEC}"                                            &>> "${LOG}"
+echo "TRANS_FLAG:     ${TRANS_FLAG}"                                      &>> "${LOG}"
+echo "USE_LONG_QA:    ${USE_LONG_QA}"                                     &>> "${LOG}"
+echo "USE_TRANS_QA:   ${USE_TRANS_QA}"                                    &>> "${LOG}"
+echo "LONG_MAX1:      ${LONG_MAX1}"                                       &>> "${LOG}"
+echo "LONG_MAX2:      ${LONG_MAX2}"                                       &>> "${LOG}"
+echo "MIN3X3:         ${MIN3X3}"                                          &>> "${LOG}"
+echo "MAX3X3:         ${MAX3X3}"                                          &>> "${LOG}"
+echo "MAXDIFF5X5:     ${MAXDIFF5X5}"                                      &>> "${LOG}"
 
-# --- Run executable ----------------------------------------------------------
+# --- Write human-readable analysis summary ---------------------------------
+
+SUMMARY_FILE=${OUT_DIR}/technical_notes_about_jobs/analysis_summary_part${TASK_ID}.txt
+
+{
+  echo "=== ECal cosmic analysis summary ==="
+  echo ""
+  echo "Date/time:        $(date)"
+  echo "Node:             ${SLURMD_NODENAME}"
+  echo "Job ID:           ${JOB_ID}"
+  echo "Task ID:          ${TASK_ID}"
+  echo ""
+  echo "Input file:       ${INPUT_FILE}"
+  echo "Output file:      ${OUT_FILE}"
+  echo ""
+  echo "Total entries:    ${TOTAL_ENTRIES}"
+  echo "Entry range:      [${FIRST_ENTRY}, ${LAST_ENTRY})"
+  echo ""
+  if [ "${TRANS_FLAG}" -eq 0 ]; then
+    echo "Analysis mode:    Longitudinal selection"
+  else
+    echo "Analysis mode:    Transverse selection"
+  fi
+  echo ""
+  echo "QA histograms:"
+  echo "  Longitudinal QA: $( [ "${USE_LONG_QA}" -eq 1 ] && echo ENABLED || echo disabled )"
+  echo "  Transverse QA:   $( [ "${USE_TRANS_QA}" -eq 1 ] && echo ENABLED || echo disabled )"
+  echo ""
+  echo "Selection cuts (longitudinal core if used):"
+  echo "  1st hottest cell integral (ADC):           > ${LONG_MAX1}"
+  echo "  2nd hottest cell integral in 3x3 (ADC):    > ${LONG_MAX2}"
+  echo "  3x3 ratio = max / (max + 2nd):             [${MIN3X3}, ${MAX3X3})"
+  echo "  Diffusivity = (5x5 - 3x3) / 5x5:           < ${MAXDIFF5X5}"
+  echo ""
+  echo "Notes:"
+  echo "  - \"hottest cell\" = cell with maximum integral in event."
+  echo "  - \"second hottest\" = largest neighbour in 3x3 window."
+  echo "  - Longitudinal QA histos live in directory 'longitudinal_QA' in the ROOT file."
+  echo "  - Transverse QA histos live in directory 'transverse_QA' in the ROOT file."
+} > "${SUMMARY_FILE}"
+
+# --- Run executable ---------------------------------------------------------
 
 cd "${BUILD_DIR}"
 
-"${EXEC}" "${INPUT_FILE}" "${OUT_FILE}" ${FIRST_ENTRY} ${LAST_ENTRY} &>> "${LOG}"
+"${EXEC}" "${INPUT_FILE}" "${OUT_FILE}" ${FIRST_ENTRY} ${LAST_ENTRY} \
+          ${TRANS_FLAG} ${USE_LONG_QA} ${USE_TRANS_QA} \
+          ${LONG_MAX1} ${LONG_MAX2} ${MIN3X3} ${MAX3X3} ${MAXDIFF5X5} &>> "${LOG}"
 
 echo "Job is finished" &>> "${LOG}"
