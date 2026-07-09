@@ -115,176 +115,6 @@ void SetChannelIntegralAmp(ChannelData &_chData, TH1F *hist, int binStart,
   //_chData.Print();
 }
 
-void FitTargetChannelHistograms(
-    TFile *outFile, const std::string &inputDirName = "target_channels",
-    const std::string &outputDirName = "fitted_target_channels",
-    int minEntriesToFit = 50, int rebinFactor = 2) {
-  if (!outFile || outFile->IsZombie()) {
-    std::cout << "FitTargetChannelHistograms: output file is null or zombie"
-              << std::endl;
-    return;
-  }
-
-  TDirectory *dirIn = (TDirectory *)outFile->Get(inputDirName.c_str());
-  if (!dirIn) {
-    std::cout << "FitTargetChannelHistograms: directory " << inputDirName
-              << " not found" << std::endl;
-    return;
-  }
-
-  outFile->cd();
-  TDirectory *dirOut = (TDirectory *)outFile->Get(outputDirName.c_str());
-  if (!dirOut) {
-    dirOut = outFile->mkdir(outputDirName.c_str());
-  }
-  dirOut->cd();
-
-  std::vector<double> v_ch;
-  std::vector<double> v_mpv;
-  std::vector<double> v_mpv_err;
-  std::vector<double> v_width;
-  std::vector<double> v_width_err;
-  std::vector<double> v_entries;
-
-  int nFitted = 0;
-
-  for (int ch = 1; ch <= NCHANNELS; ++ch) {
-    TH1F *hIn = (TH1F *)dirIn->Get(Form("h_int_ch_%d", ch));
-    if (!hIn)
-      continue;
-
-    if (hIn->GetEntries() < minEntriesToFit)
-      continue;
-
-    TH1F *hFit = (TH1F *)hIn->Clone(Form("h_fit_ch_%d", ch));
-    hFit->SetDirectory(nullptr);
-
-    if (rebinFactor > 1)
-      hFit->Rebin(rebinFactor);
-
-    int nBins = hFit->GetNbinsX();
-    if (nBins < 10) {
-      delete hFit;
-      continue;
-    }
-
-    // Find the global maximum bin after rebinning
-    int maxBin = hFit->GetMaximumBin();
-    double peakX = hFit->GetBinCenter(maxBin);
-    double peakY = hFit->GetBinContent(maxBin);
-
-    if (peakY <= 0) {
-      delete hFit;
-      continue;
-    }
-
-    // Find left/right bins above 35% of peak to estimate the signal hump width
-    double frac = 0.35 * peakY;
-    int leftBin = maxBin;
-    int rightBin = maxBin;
-
-    while (leftBin > 1 && hFit->GetBinContent(leftBin) > frac)
-      --leftBin;
-    while (rightBin < nBins && hFit->GetBinContent(rightBin) > frac)
-      ++rightBin;
-
-    double fitMin = hFit->GetBinCenter(leftBin);
-    double fitMax = hFit->GetBinCenter(rightBin);
-
-    // Expand the window a bit to accommodate the Landau tail
-    double widthGuess = peakX - fitMin;
-    if (widthGuess <= 0)
-      widthGuess = hFit->GetRMS() / 4.0;
-    if (widthGuess <= 0)
-      widthGuess = 500.0;
-
-    fitMin = std::max(0.0, peakX - 1.5 * widthGuess);
-    fitMax = peakX + 4.0 * widthGuess;
-
-    // Avoid fitting the low-integral pedestal if the peak is well away from
-    // zero
-    if (peakX > 1500.0 && fitMin < 0.5 * peakX)
-      fitMin = 0.5 * peakX;
-
-    if (fitMax <= fitMin) {
-      delete hFit;
-      continue;
-    }
-
-    TF1 *fLan = new TF1(Form("f_landau_ch_%d", ch), "landau", fitMin, fitMax);
-    fLan->SetParameters(peakY, peakX, widthGuess);
-    fLan->SetParLimits(1, 4000.0, 9000.0); // MPV between 3k and 9k
-    fLan->SetLineColor(kRed);
-    fLan->SetLineWidth(2);
-
-    int fitStatus = hFit->Fit(fLan, "QRS");
-    if (fitStatus != 0) {
-      delete hFit;
-      delete fLan;
-      continue;
-    }
-
-    double mpv = fLan->GetParameter(1);
-    double mpvErr = fLan->GetParError(1);
-    double width = fLan->GetParameter(2);
-    double widthErr = fLan->GetParError(2);
-    double entries = hFit->GetEntries();
-
-    // Quality cuts on fit
-    bool badFit = false;
-    if (mpv < 4000.0 || mpv > 9000.0)
-      badFit = true;
-    if (width <= 0.0 || width > 6000.0)
-      badFit = true;
-    if (mpv <= 0.0 || mpvErr / mpv > 0.5)
-      badFit = true;
-
-    if (badFit) {
-      delete hFit;
-      delete fLan;
-      continue;
-    }
-
-    dirOut->cd();
-    hFit->Write();
-    fLan->Write();
-
-    v_ch.push_back(ch);
-    v_mpv.push_back(mpv);
-    v_mpv_err.push_back(mpvErr);
-    v_width.push_back(width);
-    v_width_err.push_back(widthErr);
-    v_entries.push_back(entries);
-
-    nFitted++;
-  }
-
-  if (nFitted > 0) {
-    TGraphErrors *grMPV = new TGraphErrors(nFitted, v_ch.data(), v_mpv.data(),
-                                           nullptr, v_mpv_err.data());
-    grMPV->SetName("gr_mpv_vs_channel");
-    grMPV->SetTitle("Landau MPV vs channel;Channel;Landau MPV");
-    grMPV->Write();
-
-    TGraphErrors *grWidth = new TGraphErrors(
-        nFitted, v_ch.data(), v_width.data(), nullptr, v_width_err.data());
-    grWidth->SetName("gr_width_vs_channel");
-    grWidth->SetTitle("Landau width vs channel;Channel;Landau width");
-    grWidth->Write();
-
-    TGraph *grEntries = new TGraph(nFitted, v_ch.data(), v_entries.data());
-    grEntries->SetName("gr_entries_vs_channel");
-    grEntries->SetTitle("Entries vs channel;Channel;Entries");
-    grEntries->Write();
-  }
-
-  outFile->cd();
-
-  std::cout << "FitTargetChannelHistograms: fitted " << nFitted
-            << " channel histograms with Landau into directory "
-            << outputDirName << std::endl;
-}
-
 bool CheckContamination(const std::vector<ChannelData> &data,
                         const std::vector<ChannelData> &strip, bool alongPhi,
                         double minIntegralForNoise, int maxContaminatingCells,
@@ -799,7 +629,7 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   // eventCh.clear();
   // eventCh = std::move(FinalCh);
 
-    eventCh.clear();
+  eventCh.clear();
   ChannelData outCell = maxCell;
   outCell.integral = coreEnergy;
   // put that single cell into eventCh
@@ -808,14 +638,15 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
   return true;
 }
 
-// void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
+// void EcalWork(std::string inputDataTree =
+// "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
 //               std::string outputData = "hs4_133_basket5_1616162.root") {
 
-void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
-  std::string outputData   = "hs4_133_basket5_1616162.root",
-  Long64_t firstEntry      = 0,
-  Long64_t lastEntry       = 20.e6)
-{
+void EcalWork(
+    std::string inputDataTree =
+        "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
+    std::string outputData = "hs4_133_basket5_1616162.root",
+    Long64_t firstEntry = 0, Long64_t lastEntry = 20.e6) {
   TStopwatch timer1;
   timer1.Start();
 
@@ -823,11 +654,10 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
   std::vector<TH1F *> h_int_per_channel;
   h_int_per_channel.reserve(NCHANNELS);
   for (int i = 0; i < NCHANNELS; ++i) {
-  h_int_per_channel.push_back(
-  new TH1F(Form("h_int_ch_%d", i + 1),
-      Form("Integral channel %d;Integral;Entries", i + 1),
-      100, 0,
-      TransverAnalysis == true ? 15000 : 50000));
+    h_int_per_channel.push_back(
+        new TH1F(Form("h_int_ch_%d", i + 1),
+                 Form("Integral channel %d;Integral;Entries", i + 1), 100, 0,
+                 TransverAnalysis == true ? 15000 : 1.e5));
   }
 
   // Output file
@@ -850,16 +680,16 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
     return;
   }
 
-  TTree *tree = dynamic_cast<TTree*>(iFile->Get("events"));
+  TTree *tree = dynamic_cast<TTree *>(iFile->Get("events"));
   if (!tree) {
-    std::cerr << "Cannot find TTree 'events' in file "
-      << inputDataTree << std::endl;
+    std::cerr << "Cannot find TTree 'events' in file " << inputDataTree
+              << std::endl;
     return;
   }
 
   Long64_t nEntries = tree->GetEntries();
   std::cout << "The number of entries in decoded file '"
-             << inputDataTree.c_str() << "' " << nEntries << std::endl;
+            << inputDataTree.c_str() << "' " << nEntries << std::endl;
 
   // Clamp entry range
   if (lastEntry < 0 || lastEntry > nEntries) {
@@ -874,34 +704,34 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
     return;
   }
 
-  std::cout << "Processing entries in range ["
-            << firstEntry << ", " << lastEntry << ")" << std::endl;
+  std::cout << "Processing entries in range [" << firstEntry << ", "
+            << lastEntry << ")" << std::endl;
 
   // Branch variables
-  UInt_t         b_eventNum = 0;
-  Int_t          b_integral = 0;
-  Int_t          b_amplitude = 0;
+  UInt_t b_eventNum = 0;
+  Int_t b_integral = 0;
+  Int_t b_amplitude = 0;
   unsigned short b_chNum = 0;
-  unsigned short b_chZ   = 0;
+  unsigned short b_chZ = 0;
   unsigned short b_chPhi = 0;
 
-  tree->SetBranchAddress("eventNum",    &b_eventNum);
-  tree->SetBranchAddress("integral",    &b_integral);
-  tree->SetBranchAddress("amplitude",   &b_amplitude);
+  tree->SetBranchAddress("eventNum", &b_eventNum);
+  tree->SetBranchAddress("integral", &b_integral);
+  tree->SetBranchAddress("amplitude", &b_amplitude);
   tree->SetBranchAddress("channelNums", &b_chNum);
-  tree->SetBranchAddress("channel_Z",   &b_chZ);
+  tree->SetBranchAddress("channel_Z", &b_chZ);
   tree->SetBranchAddress("channel_Phi", &b_chPhi);
 
   // Summary histograms
   TH1D *h1_evNum = new TH1D("event_number", ";event;count", 2.0e6, 0, 2.0e6);
-  TH1D *h1_chNum = new TH1D("channel_number", ";Num;count",
-                  NCHANNELS, 0.5, (Float_t)NCHANNELS + 0.5);
-  TH1D *h1_chZ   = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
+  TH1D *h1_chNum = new TH1D("channel_number", ";Num;count", NCHANNELS, 0.5,
+                            (Float_t)NCHANNELS + 0.5);
+  TH1D *h1_chZ = new TH1D("channel_Z", ";Z;count", 64, 0.5, 64.5);
   TH1D *h1_chPhi = new TH1D("channel_Phi", ";Phi;count", 12, 0.5, 12.5);
   TH1D *h1_chAmp = new TH1D("channel_amplitude", ";Amp;count", 100, 0,
-                  TransverAnalysis == true ? 10000 : 30000);
+                            TransverAnalysis == true ? 10000 : 30000);
   TH1D *h1_chInt = new TH1D("channel_integral", ";Amp;count", 500, 0,
-                  TransverAnalysis == true ? 15000 : 1.e5);
+                            TransverAnalysis == true ? 15000 : 1.e5);
 
   // Pictures directory
   std::filesystem::path outRootPath(outputData);
@@ -911,7 +741,7 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
   }
 
   std::filesystem::path pictDir =
-  outDir / "pict" / (TransverAnalysis ? "transverse" : "longitudinal");
+      outDir / "pict" / (TransverAnalysis ? "transverse" : "longitudinal");
   std::filesystem::create_directories(pictDir);
   gSystem->ChangeDirectory(pictDir.string().c_str());
   std::cout << "Pictures will be saved under: " << pictDir << std::endl;
@@ -927,19 +757,19 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
   ChannelDataInEvent.reserve(NCHANNELS);
 
   TH1D *h_CountCut =
-  new TH1D("hCountCut", "Number of events after applying cut;;count",
-    20, -0.5, 19.5);
+      new TH1D("hCountCut", "Number of events after applying cut;;count", 20,
+               -0.5, 19.5);
 
   // Main loop over the selected entry range
-    for (Long64_t iEntry = firstEntry; iEntry < lastEntry; ++iEntry) {
+  for (Long64_t iEntry = firstEntry; iEntry < lastEntry; ++iEntry) {
     tree->GetEntry(iEntry);
 
     ChannelData data;
-    data.eventNum    = b_eventNum;
-    data.integral    = b_integral;
-    data.amplitude   = b_amplitude;
+    data.eventNum = b_eventNum;
+    data.integral = b_integral;
+    data.amplitude = b_amplitude;
     data.channelNums = b_chNum;
-    data.channel_Z   = b_chZ;
+    data.channel_Z = b_chZ;
     data.channel_Phi = b_chPhi;
 
     h_CountCut->Fill(0.);
@@ -950,99 +780,95 @@ void EcalWork(std::string inputDataTree = "/nica/mpd1/demanov/ecal_mpd/run_rc1-h
       currentEventNum = data.eventNum;
       hasData = true;
     } else if (data.eventNum != currentEventNum) {
-        // Process finished event
-        if (ChannelDataInEvent.size() <= MAX_CH) {
-          h_CountCut->Fill(1, ChannelDataInEvent.size());
-          h_CountCut->GetXaxis()->SetBinLabel(2, "Ch.Size()<65");
+      // Process finished event
+      if (ChannelDataInEvent.size() <= MAX_CH) {
+        h_CountCut->Fill(1, ChannelDataInEvent.size());
+        h_CountCut->GetXaxis()->SetBinLabel(2, "Ch.Size()<65");
 
-          bool KeyChData = false;
+        bool KeyChData = false;
 
-          if (TransverAnalysis) {
-            KeyChData = TransverseAnalysis(ChannelDataInEvent,
-                                        h_int_per_channel,
-                                        h_CountCut);
-          } else {
-            KeyChData = LongAnalysis(ChannelDataInEvent,
-                                  h_int_per_channel,
-                                  h_CountCut);
+        if (TransverAnalysis) {
+          KeyChData = TransverseAnalysis(ChannelDataInEvent, h_int_per_channel,
+                                         h_CountCut);
+        } else {
+          KeyChData =
+              LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+        }
+
+        if (KeyChData) {
+          for (int i = 0; i < (int)ChannelDataInEvent.size(); i++) {
+            h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+            h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+            h1_chInt->Fill(ChannelDataInEvent[i].integral);
+            h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+            h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+            h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
           }
-
-          if (KeyChData) {
-            for (int i = 0; i < (int)ChannelDataInEvent.size(); i++) {
-              h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
-              h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
-              h1_chInt->Fill(ChannelDataInEvent[i].integral);
-              h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
-              h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
-              h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
-            }
-          }
-    }
-    ChannelDataInEvent.clear();
-    currentEventNum = data.eventNum;
+        }
+      }
+      ChannelDataInEvent.clear();
+      currentEventNum = data.eventNum;
     }
 
     ChannelDataInEvent.push_back(data);
   }
 
-// Process the last event in the range (if any)
-if (!ChannelDataInEvent.empty() && ChannelDataInEvent.size() <= MAX_CH) {
-bool KeyChData = false;
+  // Process the last event in the range (if any)
+  if (!ChannelDataInEvent.empty() && ChannelDataInEvent.size() <= MAX_CH) {
+    bool KeyChData = false;
 
-if (TransverAnalysis) {
-KeyChData = TransverseAnalysis(ChannelDataInEvent,
-                         h_int_per_channel,
-                         h_CountCut);
-} else {
-KeyChData = LongAnalysis(ChannelDataInEvent,
-                   h_int_per_channel,
-                   h_CountCut);
-}
+    if (TransverAnalysis) {
+      KeyChData =
+          TransverseAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+    } else {
+      KeyChData =
+          LongAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+    }
 
-if (KeyChData) {
-for (int i = 0; i < (int)ChannelDataInEvent.size(); i++) {
-h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
-h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
-h1_chInt->Fill(ChannelDataInEvent[i].integral);
-h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
-h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
-h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
-}
-}
-}
+    if (KeyChData) {
+      for (int i = 0; i < (int)ChannelDataInEvent.size(); i++) {
+        h1_evNum->Fill(ChannelDataInEvent[i].eventNum);
+        h1_chAmp->Fill(ChannelDataInEvent[i].amplitude);
+        h1_chInt->Fill(ChannelDataInEvent[i].integral);
+        h1_chNum->Fill(ChannelDataInEvent[i].channelNums);
+        h1_chPhi->Fill(ChannelDataInEvent[i].channel_Phi);
+        h1_chZ->Fill(ChannelDataInEvent[i].channel_Z);
+      }
+    }
+  }
 
-// Write basic histograms
-outFile->cd();
-h1_evNum->Write();
-h_CountCut->Write();
-h1_chAmp->Write();
-h1_chInt->Write();
-h1_chNum->Write();
-h1_chPhi->Write();
-h1_chZ->Write();
+  // Write basic histograms
+  outFile->cd();
+  h1_evNum->Write();
+  h_CountCut->Write();
+  h1_chAmp->Write();
+  h1_chInt->Write();
+  h1_chNum->Write();
+  h1_chPhi->Write();
+  h1_chZ->Write();
 
-// Subdirectory for target-channel histograms
-TDirectory *dirTargets = (TDirectory*)outFile->Get("target_channels");
-if (!dirTargets) {
-dirTargets = outFile->mkdir("target_channels");
-}
-dirTargets->cd();
+  // Subdirectory for target-channel histograms
+  TDirectory *dirTargets = (TDirectory *)outFile->Get("target_channels");
+  if (!dirTargets) {
+    dirTargets = outFile->mkdir("target_channels");
+  }
+  dirTargets->cd();
 
-// Write per-channel target histograms
-for (auto *h : h_int_per_channel) {
-if (!h) continue;
-h->Write();
-}
+  // Write per-channel target histograms
+  for (auto *h : h_int_per_channel) {
+    if (!h)
+      continue;
+    h->Write();
+  }
 
-outFile->cd();
-FitTargetChannelHistograms(outFile);
+  outFile->cd();
 
-std::cout << "\n\nOutput saved to: " << outFile->GetName() << "\n\n"
-<< std::endl;
+  std::cout << "\n\nOutput saved to: " << outFile->GetName() << "\n\n"
+            << std::endl;
 
-timer1.Stop();
-timer1.Print();
-outFile->Close();
+  timer1.Stop();
+  timer1.Print();
+  outFile->Close();
 }
 
 // Convert iFile.data to oFile.root without cuts
