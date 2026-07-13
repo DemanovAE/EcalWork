@@ -173,6 +173,30 @@ Conceptually:
 
 The longitudinal “core energy” stored per channel is the sum of the hottest cell and its strongest neighbour in 3×3. This is the main observable for muon studies and calibration scans.
 
+## Transverse selection steering
+
+Transverse selection now uses the same external steering pattern as
+longitudinal selection.
+
+**Config fields (struct `EcalConfig`):**
+
+- `trans_amp_thr1`  – basic amplitude threshold_1 (ADC) for entering channels
+- `trans_amp_thr2`  – stronger threshold_2 (ADC) used for strip finding
+- `trans_min_strip_len` – minimal number of consecutive cells in a strip
+- `trans_contam_frac`   – reserved fraction (0–1) for future contamination logic
+
+These parameters are:
+
+1. Initialised with defaults in `main()`.
+2. Overridable from command-line arguments.
+3. In practice, set from the SLURM steering script.
+
+Inside `TransverseAnalysis`:
+
+- All previous hard-coded numbers (100, 500, 5, 0.20) are replaced by
+  the corresponding `cfg.trans_*` fields.
+- The physics logic is unchanged; only the source of the thresholds moved
+  from literals to the config struct.
 ---
 
 ## 5. Cluster run (SLURM job array)

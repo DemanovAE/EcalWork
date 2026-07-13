@@ -51,14 +51,22 @@ const int MAX_PHI = 12;
 bool SetBinNameCutHisto = true;
 
 struct EcalConfig {
-  bool  transAnalysis;
-  bool  useLongQA;
-  bool  useTransQA;
-  int   long_max_1st_Integral;
-  int   long_max_2nd_Integral;
+  bool transAnalysis;
+  bool useLongQA;
+  bool useTransQA;
+
+  // Longitudinal cuts
+  int long_max_1st_Integral;
+  int long_max_2nd_Integral;
   float long_min_3x3_ratio;
   float long_max_3x3_ratio;
   float long_max_diffusivity_5x5;
+
+  // Transverse cuts (steering)
+  double trans_amp_thr1;    // threshold_1: basic amp cut (ADC)
+  double trans_amp_thr2;    // threshold_2: strong amp cut (ADC)
+  int trans_min_strip_len;  // minLen: minimal strip length (cells)
+  double trans_contam_frac; // threshold_3: fraction (0–1), reserved
 };
 
 // For Trans Analysis
@@ -382,7 +390,7 @@ bool CheckContamination(const std::vector<ChannelData> &data,
 // yes, return the indices of those hits
 bool FindOneStrip(const std::vector<ChannelData> &data,
                   std::vector<int> &stripIndices, int &foundOuter,
-                  bool alongPhi, double threshold_2, int minLen = 5) {
+                  bool alongPhi, int minLen = 5) {
 
   stripIndices.clear();
   foundOuter = -1;
@@ -435,13 +443,82 @@ bool FindOneStrip(const std::vector<ChannelData> &data,
   }
   return false;
 }
+// Example: stricter contamination check around strip edges.
+// This is NOT used in current production; call is commented out in
+// TransverseAnalysis. The idea: count non-strip hits in a band of width 1
+// around the strip, especially near the ends, and reject if too many.
+
+bool CheckEdgeContamination(const std::vector<ChannelData> &eventHits,
+                            const std::vector<ChannelData> &stripHits,
+                            bool alongPhi, double noiseIntegralThreshold,
+                            int maxEdgeHits,
+                            int &edgeCount, // ← added
+                            int bandRadiusZ = 1, int bandRadiusPhi = 1) {
+  edgeCount = 0;
+
+  std::set<std::pair<int, int>> stripCoords;
+  for (const auto &ch : stripHits)
+    stripCoords.insert({(int)ch.channel_Z, (int)ch.channel_Phi});
+
+  int minInner = +9999, maxInner = -9999;
+  for (const auto &ch : stripHits) {
+    int inner = alongPhi ? (int)ch.channel_Z : (int)ch.channel_Phi;
+    if (inner < minInner)
+      minInner = inner;
+    if (inner > maxInner)
+      maxInner = inner;
+  }
+
+  for (const auto &hit : eventHits) {
+    if (hit.integral < noiseIntegralThreshold)
+      continue;
+    int z = (int)hit.channel_Z;
+    int phi = (int)hit.channel_Phi;
+    if (stripCoords.count({z, phi}))
+      continue;
+
+    int dz = 0, dphi = 0;
+    if (alongPhi) {
+      // Phi-strip: fixed Phi row, extended in Z
+      // dz   = distance beyond strip Z endpoints
+      // dphi = distance from strip's Phi row (sideways)
+      int stripPhi = (int)stripHits.front().channel_Phi;
+      dz = z - std::max(std::min(z, maxInner), minInner);
+      dphi = phi - stripPhi;
+    } else {
+      // Z-strip: fixed Z column, extended in Phi
+      // dphi = distance beyond strip Phi endpoints
+      // dz   = distance from strip's Z column (sideways)
+      int stripZ = (int)stripHits.front().channel_Z;
+      dz = z - stripZ;
+      dphi = phi - std::max(std::min(phi, maxInner), minInner);
+    }
+
+    if (std::abs(dz) <= bandRadiusZ && std::abs(dphi) <= bandRadiusPhi) {
+      ++edgeCount;
+      if (edgeCount > maxEdgeHits)
+        return false;
+    }
+  }
+  return true;
+}
 
 // Find a target channel in a strip: center of 5 consecutive channels
 bool FindTargetChannelInStrip(const std::vector<ChannelData> &strip,
                               bool alongPhi, double threshold_2,
-                              ChannelData &target) {
+                              ChannelData &target, const EcalConfig &cfg) {
+
+  // std::cout << "[FindTarget] strip.size=" << strip.size()
+  //           << " alongPhi=" << alongPhi << " thr2=" << threshold_2
+  //           << "   cfg.thr2 " << cfg.trans_amp_thr2 << "\n";
+
+  // for (const auto &ch : strip) {
+  //   std::cout << "    [strip cell] Phi=" << ch.channel_Phi
+  //             << " Z=" << ch.channel_Z << " int=" << ch.integral << "\n";
+  // }
+
   // Need at least 5 channels to form a consecutive group
-  if (strip.size() < 5)
+  if (strip.size() < cfg.trans_min_strip_len)
     return false;
 
   // Work on a copy of the input strip
@@ -474,9 +551,18 @@ bool FindTargetChannelInStrip(const std::vector<ChannelData> &strip,
                                     (int)ordered[i + 1].channel_Phi + 1 ==
                                         (int)ordered[i + 2].channel_Phi));
 
+    // std::cout << "  center i=" << i << " coord="
+    //           << (alongPhi ? (int)ordered[i].channel_Z
+    //                        : (int)ordered[i].channel_Phi)
+    //           << " consecutive=" << consecutive << "\n";
+
     // If not consecutive, skip this center
     if (!consecutive)
       continue;
+
+    // std::cout << "    neighbors integrals=" << ordered[i - 2].integral << ","
+    //           << ordered[i - 1].integral << "," << ordered[i + 1].integral
+    //           << "," << ordered[i + 2].integral << "\n";
 
     // Check that the four neighbors around the center are above the threshold
     bool neighborsOK = ordered[i - 2].integral > threshold_2 &&
@@ -490,24 +576,23 @@ bool FindTargetChannelInStrip(const std::vector<ChannelData> &strip,
       return true;
     }
   }
+  std::cout << "[FindTarget] no suitable center found\n";
 
   // No suitable target found
   return false;
 }
 
-// bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
-//                         std::vector<TH1F *> h_int_per_channel, TH1D *hCut) {
 bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
                         std::vector<TH1F *> h_int_per_channel, TH1D *hCut,
-                        TransSelHists *hs = nullptr) {
+                        const EcalConfig &cfg, TransSelHists *hs = nullptr) {
   std::vector<int> _PhiCount(12);
   std::vector<int> _ZCount(64);
   std::vector<ChannelData> data;
   data.reserve(eventCh.size());
   // FillIf(hs ? hs->hCutFlow : nullptr, 0);
 
-  const double threshold_1 = 100.0;
-  const double threshold_2 = 500.0;
+  const double threshold_1 = cfg.trans_amp_thr1;
+  const double threshold_2 = cfg.trans_amp_thr2;
 
   for (int i = 0; i < eventCh.size(); i++) {
     FillIf(hs ? hs->hAmp_all : nullptr, eventCh[i].amplitude);
@@ -535,10 +620,11 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
   std::vector<int> phiStrip, zStrip;
 
   int phiStripOuter = -1, zStripOuter = -1;
-  bool hasPhiStrip =
-      FindOneStrip(data, phiStrip, phiStripOuter, true, threshold_2, 5);
-  bool hasZStrip =
-      FindOneStrip(data, zStrip, zStripOuter, false, threshold_2, 5);
+  bool hasPhiStrip = FindOneStrip(data, phiStrip, phiStripOuter, true,
+                                  (int)cfg.trans_min_strip_len);
+  bool hasZStrip = FindOneStrip(data, zStrip, zStripOuter, false,
+                                (int)cfg.trans_min_strip_len);
+
   FillIf(hs ? hs->hStripLen_all : nullptr,
          hasPhiStrip ? (int)phiStrip.size()
                      : (hasZStrip ? (int)zStrip.size() : 0));
@@ -579,34 +665,56 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
   hCut->Fill(4, data.size());
 
   //  User-configurable threshold_3 (e.g. 0.20 = 20%)
-  const double threshold_3 = 0.20;
-
-  // 4. Contamination check
-  double minIntegralForNoise =
-      threshold_2 * 0.2; // example: weaker threshold for counting contamination
-  int maxContaminatingCells = 2; // allow up to 2 near off-strip hits
-  int neighborhoodRadiusZ = 1;
-  int neighborhoodRadiusPhi = 1;
-  if (hasZStrip && !hasPhiStrip) {
-    if (!CheckContamination(data, filteredData, false, minIntegralForNoise,
-                            maxContaminatingCells, neighborhoodRadiusZ,
-                            neighborhoodRadiusPhi)) {
-      eventCh.clear();
-      return false;
-    }
-  }
+  const double threshold_3 = cfg.trans_contam_frac; // reserved, not used yet
 
   // FillIf(hs ? hs->hContamCount_pass : nullptr, contaminationCount);
   FillIf(hs ? hs->hCutFlow : nullptr, 3);
 
   hCut->Fill(5, data.size());
 
-  for (int i = 0; i < data.size(); i++) {
-    int ch = data[i].channelNums;
-    if (ch >= 1 && ch <= NCHANNELS) {
-      h_int_per_channel[ch - 1]->Fill(data[i].integral);
+  // Edge contamination: reject too-diagonal tracks
+  // noiseThr: only count hits above this integral as contamination
+  // maxDiagHits=99 for QA-only pass, lower later based on hContamCount_all
+  double noiseThr = threshold_2 * 0.3;
+  int maxDiagHits = 99; // set to 99 first to just fill QA, then tune
+  int edgeCount = 0;
+
+  if (hasPhiStrip) {
+    bool contamOk = CheckEdgeContamination(data, filteredData,
+                                           /*alongPhi=*/true, noiseThr,
+                                           maxDiagHits, edgeCount,
+                                           /*bandRadiusZ=*/1,
+                                           /*bandRadiusPhi=*/1);
+    FillIf(hs ? hs->hContamCount_all : nullptr, edgeCount);
+    if (!contamOk) {
+      eventCh.clear();
+      return false;
     }
+    FillIf(hs ? hs->hContamCount_pass : nullptr, edgeCount);
+
+  } else if (hasZStrip) {
+    bool contamOk = CheckEdgeContamination(data, filteredData,
+                                           /*alongPhi=*/false, noiseThr,
+                                           maxDiagHits, edgeCount,
+                                           /*bandRadiusZ=*/1,
+                                           /*bandRadiusPhi=*/1);
+    FillIf(hs ? hs->hContamCount_all : nullptr, edgeCount);
+    if (!contamOk) {
+      eventCh.clear();
+      return false;
+    }
+    FillIf(hs ? hs->hContamCount_pass : nullptr, edgeCount);
   }
+
+  FillIf(hs ? hs->hCutFlow : nullptr, 3);
+  hCut->Fill(5, data.size());
+
+  // for (int i = 0; i < data.size(); i++) {
+  //   int ch = data[i].channelNums;
+  //   if (ch >= 1 && ch <= NCHANNELS) {
+  //     h_int_per_channel[ch - 1]->Fill(data[i].integral);
+  //   }
+  // }
 
   if (data[0].eventNum > 1700 && data[0].eventNum < 2000) {
     // if (data[0].eventNum > 1700 && data[0].eventNum < 1800) {
@@ -624,10 +732,10 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
 
   if (hasPhiStrip) {
     hasTarget = FindTargetChannelInStrip(filteredData, true, threshold_2,
-                                         targetChannel);
+                                         targetChannel, cfg);
   } else if (hasZStrip) {
     hasTarget = FindTargetChannelInStrip(filteredData, false, threshold_2,
-                                         targetChannel);
+                                         targetChannel, cfg);
   }
   if (hasTarget)
     FillIf(hs ? hs->hTargetIntegral_all : nullptr, targetChannel.integral);
@@ -637,6 +745,12 @@ bool TransverseAnalysis(std::vector<ChannelData> &eventCh,
     return false;
   }
 
+  if (hasTarget) {
+    int ch = targetChannel.channelNums;
+    if (ch >= 1 && ch <= NCHANNELS)
+      h_int_per_channel[ch - 1]->Fill(targetChannel.integral);
+  }
+  
   FillIf(hs ? hs->hTargetIntegral_pass : nullptr, targetChannel.integral);
   FillIf(hs ? hs->hCutFlow : nullptr, 4);
 
@@ -898,13 +1012,11 @@ bool LongAnalysis(std::vector<ChannelData> &eventCh,
 //     std::string inputDataTree =
 //         "/nica/mpd1/demanov/ecal_mpd/run_rc1-hs4_133_basket5_1616162.root",
 //     std::string outputData = "hs4_133_basket5_1616162.root",
-//     Long64_t firstEntry = 0, Long64_t lastEntry = 20.e6, const EcalConfig &cfg) {
+//     Long64_t firstEntry = 0, Long64_t lastEntry = 20.e6, const EcalConfig
+//     &cfg) {
 
-void EcalWork(std::string inputDataTree,
-              std::string outputData,
-              Long64_t firstEntry,
-              Long64_t lastEntry,
-              const EcalConfig &cfg){
+void EcalWork(std::string inputDataTree, std::string outputData,
+              Long64_t firstEntry, Long64_t lastEntry, const EcalConfig &cfg) {
 
   TStopwatch timer1;
   timer1.Start();
@@ -919,12 +1031,14 @@ void EcalWork(std::string inputDataTree,
   //                cfg.transAnalysis == true ? 15000 : 1.e5));
   // }
   for (int i = 0; i < NCHANNELS; ++i) {
-    const char* hname = Form("h_int_ch_%d", i + 1);
-  
-    const char* htitle = cfg.transAnalysis
-        ? Form("Target integral channel %d;Integral;Entries", i + 1)
-        : Form("Core energy (1st+2nd) channel %d;Core energy;Entries", i + 1);
-  
+    const char *hname = Form("h_int_ch_%d", i + 1);
+
+    const char *htitle =
+        cfg.transAnalysis
+            ? Form("Target integral channel %d;Integral;Entries", i + 1)
+            : Form("Core energy (1st+2nd) channel %d;Core energy;Entries",
+                   i + 1);
+
     h_int_per_channel.push_back(
         new TH1F(hname, htitle, 100, 0, cfg.transAnalysis ? 15000 : 1.e5));
   }
@@ -1070,13 +1184,10 @@ void EcalWork(std::string inputDataTree,
 
         if (cfg.transAnalysis) {
           KeyChData = TransverseAnalysis(ChannelDataInEvent, h_int_per_channel,
-                                         h_CountCut, pTransHs);
+                                         h_CountCut, cfg, pTransHs);
         } else {
-          KeyChData = LongAnalysis(ChannelDataInEvent,
-                                  h_int_per_channel,
-                                  cfg,
-                                  h_CountCut,
-                                  pLongHs);
+          KeyChData = LongAnalysis(ChannelDataInEvent, h_int_per_channel, cfg,
+                                   h_CountCut, pLongHs);
         }
 
         if (KeyChData) {
@@ -1102,15 +1213,11 @@ void EcalWork(std::string inputDataTree,
     bool KeyChData = false;
 
     if (cfg.transAnalysis) {
-      KeyChData =
-          TransverseAnalysis(ChannelDataInEvent, h_int_per_channel, h_CountCut);
+      KeyChData = TransverseAnalysis(ChannelDataInEvent, h_int_per_channel,
+                                     h_CountCut, cfg, pTransHs);
     } else {
-      KeyChData =
-          KeyChData = LongAnalysis(ChannelDataInEvent,
-                         h_int_per_channel,
-                         cfg,
-                         h_CountCut,
-                         pLongHs);
+      KeyChData = KeyChData = LongAnalysis(
+          ChannelDataInEvent, h_int_per_channel, cfg, h_CountCut, pLongHs);
     }
 
     if (KeyChData) {

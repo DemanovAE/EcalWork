@@ -6,7 +6,7 @@
 #SBATCH -N 1
 #SBATCH -o /scratch3/dflusova/ECalWork/log/qa_%A_%a.out
 #SBATCH -e /scratch3/dflusova/ECalWork/log/qa_%A_%a.err
-#SBATCH -x ncx111,ncx112,ncx113,ncx115,ncx117,ncx121,ncx127,ncx146,ncx169,ncx171,ncx172,ncx181,ncx185,ncx203,ncx207,ncx208,ncx211,ncx213,ncx215,ncx216,ncx217,ncx222,ncx223,ncx224,ncx225,ncx226,ncx227
+#SBATCH -x ncx113,ncx114,ncx116,ncx122,ncx123,ncx124,ncx125,ncx126,ncx132,ncx138,ncx142,ncx143,ncx144,ncx145,ncx146,ncx147,ncx148,ncx150,ncx151,ncx152,ncx153,ncx154,ncx155,ncx156,ncx157,ncx158,ncx159,ncx160,ncx161,ncx162,ncx163,ncx164,ncx165,ncx166,ncx167,ncx168,ncx170,ncx174,ncx175,ncx176,ncx177,ncx180,ncx182,ncx184,ncx186,ncx187,ncx188,ncx206,ncx212,ncx214,ncx228
 
 # --- Environment -------------------------------------------------------------
 
@@ -52,17 +52,23 @@ fi
 # --- Selection criteria (steering) ------------------------------------------
 
 # 0 = longitudinal analysis, 1 = transverse analysis
-TRANS_FLAG=0
+TRANS_FLAG=1
 
 # Use QA histos for long / trans (1 = yes, 0 = no)
-USE_LONG_QA=1
-USE_TRANS_QA=0
+USE_LONG_QA=0
+USE_TRANS_QA=1
 
 LONG_MAX1=3500
 LONG_MAX2=1500
 MIN3X3=0.75
 MAX3X3=0.99
 MAXDIFF5X5=0.25
+
+# Transverse cuts (steering)
+TRANS_AMP1=300
+TRANS_AMP2=500
+TRANS_MINLEN=5
+TRANS_CONTAM=0.50   # reserved, not used for now
 
 # --- Logging -----------------------------------------------------------------
 
@@ -117,6 +123,14 @@ SUMMARY_FILE=${OUT_DIR}/technical_notes_about_jobs/analysis_summary_part${TASK_I
   echo "  3x3 ratio = max / (max + 2nd):             [${MIN3X3}, ${MAX3X3})"
   echo "  Diffusivity = (5x5 - 3x3) / 5x5:           < ${MAXDIFF5X5}"
   echo ""
+  if [ "${TRANS_FLAG}" -eq 1 ]; then
+  echo "Selection cuts (transverse strips):"
+  echo "  Channel amplitude threshold_1 (ADC):      > ${TRANS_AMP1}"
+  echo "  Strip neighbor threshold_2 (ADC):         > ${TRANS_AMP2}"
+  echo "  Minimal strip length (cells):             >= ${TRANS_MINLEN}"
+  echo "  Contamination fraction (reserved):        ${TRANS_CONTAM}"
+  echo ""
+  fi
   echo "Notes:"
   echo "  - \"hottest cell\" = cell with maximum integral in event."
   echo "  - \"second hottest\" = largest neighbour in 3x3 window."
@@ -130,6 +144,7 @@ cd "${BUILD_DIR}"
 
 "${EXEC}" "${INPUT_FILE}" "${OUT_FILE}" ${FIRST_ENTRY} ${LAST_ENTRY} \
           ${TRANS_FLAG} ${USE_LONG_QA} ${USE_TRANS_QA} \
-          ${LONG_MAX1} ${LONG_MAX2} ${MIN3X3} ${MAX3X3} ${MAXDIFF5X5} &>> "${LOG}"
+          ${LONG_MAX1} ${LONG_MAX2} ${MIN3X3} ${MAX3X3} ${MAXDIFF5X5} \
+          ${TRANS_AMP1} ${TRANS_AMP2} ${TRANS_MINLEN} ${TRANS_CONTAM} &>> "${LOG}"
 
 echo "Job is finished" &>> "${LOG}"

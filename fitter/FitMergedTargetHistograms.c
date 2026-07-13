@@ -12,10 +12,12 @@
 #include "TH1F.h"
 #include "TObject.h"
 #include "TString.h"
+#include "TTree.h"
 
 const int NCHANNELS = 768;
 bool TransverAnalysis = true;
 
+// Find the bin with maximum content in [xmin, xmax]
 int FindMaxBinInRange(TH1 *h, double xmin, double xmax) {
   if (!h)
     return -1;
@@ -28,13 +30,13 @@ int FindMaxBinInRange(TH1 *h, double xmin, double xmax) {
   if (bmin > bmax)
     return -1;
 
-  int bestBin = -1;
-  double bestY = -1.0;
+  int    bestBin = -1;
+  double bestY   = -1.0;
 
   for (int b = bmin; b <= bmax; ++b) {
     double y = h->GetBinContent(b);
     if (y > bestY) {
-      bestY = y;
+      bestY  = y;
       bestBin = b;
     }
   }
@@ -42,11 +44,16 @@ int FindMaxBinInRange(TH1 *h, double xmin, double xmax) {
   return bestBin;
 }
 
+// ----------------------------------------------------------------------
+// Transverse: fit Landau to per-channel target histos
+// ----------------------------------------------------------------------
 void FitTransverseTargetChannelHistograms(
-    TFile *outFile, const std::string &inputDirName = "target_channels",
+    TFile *outFile,
+    const std::string &inputDirName  = "target_channels",
     const std::string &outputDirName = "fitted_target_channels_transverse",
-    int minEntriesToFit = 50, int rebinFactor = 2) {
-
+    int  minEntriesToFit             = 50,
+    int  rebinFactor                 = 2)
+{
   if (!outFile || outFile->IsZombie()) {
     std::cout
         << "FitTransverseTargetChannelHistograms: output file is null or zombie"
@@ -78,6 +85,16 @@ void FitTransverseTargetChannelHistograms(
   std::vector<double> v_ch, v_mpv, v_mpv_err, v_width, v_width_err, v_entries;
   int nFitted = 0;
 
+  // Optional: per-channel tree for calibration
+  TTree *tCal = new TTree("trans_calib", "Transverse per-channel calibration");
+  double t_ch = 0, t_mpv = 0, t_mpvErr = 0, t_width = 0, t_widthErr = 0, t_entries = 0;
+  tCal->Branch("channel", &t_ch, "channel/D");
+  tCal->Branch("mpv",     &t_mpv,     "mpv/D");
+  tCal->Branch("mpvErr",  &t_mpvErr,  "mpvErr/D");
+  tCal->Branch("width",   &t_width,   "width/D");
+  tCal->Branch("widthErr",&t_widthErr,"widthErr/D");
+  tCal->Branch("entries", &t_entries, "entries/D");
+
   for (int ch = 1; ch <= NCHANNELS; ++ch) {
     TH1F *hIn = (TH1F *)dirIn->Get(Form("h_int_ch_%d", ch));
     if (!hIn)
@@ -97,7 +114,7 @@ void FitTransverseTargetChannelHistograms(
       continue;
     }
 
-    int maxBin = hFit->GetMaximumBin();
+    int maxBin   = hFit->GetMaximumBin();
     double peakX = hFit->GetBinCenter(maxBin);
     double peakY = hFit->GetBinContent(maxBin);
 
@@ -107,7 +124,7 @@ void FitTransverseTargetChannelHistograms(
     }
 
     double frac = 0.35 * peakY;
-    int leftBin = maxBin;
+    int leftBin  = maxBin;
     int rightBin = maxBin;
 
     while (leftBin > 1 && hFit->GetBinContent(leftBin) > frac)
@@ -149,11 +166,11 @@ void FitTransverseTargetChannelHistograms(
       continue;
     }
 
-    double mpv = fLan->GetParameter(1);
+    double mpv    = fLan->GetParameter(1);
     double mpvErr = fLan->GetParError(1);
-    double width = fLan->GetParameter(2);
+    double width  = fLan->GetParameter(2);
     double widthErr = fLan->GetParError(2);
-    double entries = hFit->GetEntries();
+    double entries  = hFit->GetEntries();
 
     bool badFit = false;
     if (mpv < 4000.0 || mpv > 9000.0)
@@ -179,27 +196,44 @@ void FitTransverseTargetChannelHistograms(
     v_width.push_back(width);
     v_width_err.push_back(widthErr);
     v_entries.push_back(entries);
-    nFitted++;
+    ++nFitted;
+
+    // Fill tree
+    t_ch      = ch;
+    t_mpv     = mpv;
+    t_mpvErr  = mpvErr;
+    t_width   = width;
+    t_widthErr= widthErr;
+    t_entries = entries;
+    tCal->Fill();
   }
 
   if (nFitted > 0) {
-    TGraphErrors *grMPV = new TGraphErrors(nFitted, v_ch.data(), v_mpv.data(),
-                                           nullptr, v_mpv_err.data());
+    TGraphErrors *grMPV =
+        new TGraphErrors(nFitted, v_ch.data(), v_mpv.data(), nullptr,
+                         v_mpv_err.data());
     grMPV->SetName("gr_trans_mpv_vs_channel");
     grMPV->SetTitle("Transverse Landau MPV vs channel;Channel;Landau MPV");
     grMPV->Write("", TObject::kOverwrite);
 
-    TGraphErrors *grWidth = new TGraphErrors(
-        nFitted, v_ch.data(), v_width.data(), nullptr, v_width_err.data());
+    TGraphErrors *grWidth =
+        new TGraphErrors(nFitted, v_ch.data(), v_width.data(), nullptr,
+                         v_width_err.data());
     grWidth->SetName("gr_trans_width_vs_channel");
     grWidth->SetTitle(
         "Transverse Landau width vs channel;Channel;Landau width");
     grWidth->Write("", TObject::kOverwrite);
 
-    TGraph *grEntries = new TGraph(nFitted, v_ch.data(), v_entries.data());
+    TGraph *grEntries =
+        new TGraph(nFitted, v_ch.data(), v_entries.data());
     grEntries->SetName("gr_trans_entries_vs_channel");
     grEntries->SetTitle("Transverse entries vs channel;Channel;Entries");
     grEntries->Write("", TObject::kOverwrite);
+
+    dirOut->cd();
+    tCal->Write("", TObject::kOverwrite);
+  } else {
+    delete tCal;
   }
 
   outFile->cd();
@@ -208,11 +242,16 @@ void FitTransverseTargetChannelHistograms(
             << std::endl;
 }
 
+// ----------------------------------------------------------------------
+// Longitudinal: fit gaus+gaus to per-channel target histos
+// ----------------------------------------------------------------------
 void FitLongitudinalTargetChannelHistograms(
-    TFile *outFile, const std::string &inputDirName = "target_channels",
+    TFile *outFile,
+    const std::string &inputDirName  = "target_channels",
     const std::string &outputDirName = "fitted_target_channels_longitudinal",
-    int minEntriesToFit = 50, int rebinFactor = 2) {
-
+    int  minEntriesToFit             = 50,
+    int  rebinFactor                 = 2)
+{
   if (!outFile || outFile->IsZombie()) {
     std::cout << "FitLongitudinalTargetChannelHistograms: output file is null "
                  "or zombie"
@@ -243,6 +282,16 @@ void FitLongitudinalTargetChannelHistograms(
   std::vector<double> v_ch, v_mean, v_mean_err, v_sigma, v_sigma_err, v_entries;
   int nFitted = 0;
 
+  // Optional: per-channel tree
+  TTree *tCal = new TTree("long_calib", "Longitudinal per-channel calibration");
+  double t_ch = 0, t_mean = 0, t_meanErr = 0, t_sigma = 0, t_sigmaErr = 0, t_entries = 0;
+  tCal->Branch("channel", &t_ch, "channel/D");
+  tCal->Branch("mean",    &t_mean,    "mean/D");
+  tCal->Branch("meanErr", &t_meanErr, "meanErr/D");
+  tCal->Branch("sigma",   &t_sigma,   "sigma/D");
+  tCal->Branch("sigmaErr",&t_sigmaErr,"sigmaErr/D");
+  tCal->Branch("entries", &t_entries, "entries/D");
+
   for (int ch = 1; ch <= NCHANNELS; ++ch) {
     TH1F *hIn = (TH1F *)dirIn->Get(Form("h_int_ch_%d", ch));
     if (!hIn)
@@ -270,9 +319,9 @@ void FitLongitudinalTargetChannelHistograms(
       continue;
     }
 
-    double bkgAmp0 = hFit->GetBinContent(bkgBin);
+    double bkgAmp0  = hFit->GetBinContent(bkgBin);
     double bkgMean0 = hFit->GetBinCenter(bkgBin);
-    double sigAmp0 = hFit->GetBinContent(sigBin);
+    double sigAmp0  = hFit->GetBinContent(sigBin);
     double sigMean0 = hFit->GetBinCenter(sigBin);
 
     if (bkgAmp0 <= 0 || sigAmp0 <= 0) {
@@ -302,10 +351,10 @@ void FitLongitudinalTargetChannelHistograms(
       continue;
     }
 
-    double mean = fTot->GetParameter(4);
+    double mean    = fTot->GetParameter(4);
     double meanErr = fTot->GetParError(4);
-    double sigma = fTot->GetParameter(5);
-    double sigmaErr = fTot->GetParError(5);
+    double sigma   = fTot->GetParameter(5);
+    double sigmaErr= fTot->GetParError(5);
     double entries = hFit->GetEntries();
 
     bool badFit = false;
@@ -332,27 +381,44 @@ void FitLongitudinalTargetChannelHistograms(
     v_sigma.push_back(sigma);
     v_sigma_err.push_back(sigmaErr);
     v_entries.push_back(entries);
-    nFitted++;
+    ++nFitted;
+
+    // Fill tree
+    t_ch       = ch;
+    t_mean     = mean;
+    t_meanErr  = meanErr;
+    t_sigma    = sigma;
+    t_sigmaErr = sigmaErr;
+    t_entries  = entries;
+    tCal->Fill();
   }
 
   if (nFitted > 0) {
-    TGraphErrors *grMean = new TGraphErrors(nFitted, v_ch.data(), v_mean.data(),
-                                            nullptr, v_mean_err.data());
+    TGraphErrors *grMean =
+        new TGraphErrors(nFitted, v_ch.data(), v_mean.data(), nullptr,
+                         v_mean_err.data());
     grMean->SetName("gr_long_signal_mean_vs_channel");
     grMean->SetTitle("Longitudinal signal mean vs channel;Channel;Signal mean");
     grMean->Write("", TObject::kOverwrite);
 
-    TGraphErrors *grSigma = new TGraphErrors(
-        nFitted, v_ch.data(), v_sigma.data(), nullptr, v_sigma_err.data());
+    TGraphErrors *grSigma =
+        new TGraphErrors(nFitted, v_ch.data(), v_sigma.data(), nullptr,
+                         v_sigma_err.data());
     grSigma->SetName("gr_long_signal_sigma_vs_channel");
     grSigma->SetTitle(
         "Longitudinal signal sigma vs channel;Channel;Signal sigma");
     grSigma->Write("", TObject::kOverwrite);
 
-    TGraph *grEntries = new TGraph(nFitted, v_ch.data(), v_entries.data());
+    TGraph *grEntries =
+        new TGraph(nFitted, v_ch.data(), v_entries.data());
     grEntries->SetName("gr_long_entries_vs_channel");
     grEntries->SetTitle("Longitudinal entries vs channel;Channel;Entries");
     grEntries->Write("", TObject::kOverwrite);
+
+    dirOut->cd();
+    tCal->Write("", TObject::kOverwrite);
+  } else {
+    delete tCal;
   }
 
   outFile->cd();
@@ -361,11 +427,17 @@ void FitLongitudinalTargetChannelHistograms(
             << outputDirName << std::endl;
 }
 
+// ----------------------------------------------------------------------
+// Wrapper functions for merged files
+// ----------------------------------------------------------------------
 void FitMergedTargetHistograms(
-    const char *mergedFileName, bool doTransverse = true,
-    const char *inputDirName = "target_channels",
+    const char *mergedFileName,
+    bool        doTransverse = true,
+    const char *inputDirName  = "target_channels",
     const char *outputDirName = "fitted_target_channels",
-    int minEntriesToFit = 50, int rebinFactor = 2) {
+    int         minEntriesToFit = 50,
+    int         rebinFactor     = 2)
+{
   TransverAnalysis = doTransverse;
 
   TFile *f = TFile::Open(mergedFileName, "UPDATE");
@@ -376,11 +448,17 @@ void FitMergedTargetHistograms(
   }
 
   if (TransverAnalysis) {
-    FitTransverseTargetChannelHistograms(f, inputDirName, outputDirName,
-                                         minEntriesToFit, rebinFactor);
+    FitTransverseTargetChannelHistograms(f,
+                                         inputDirName,
+                                         outputDirName,
+                                         minEntriesToFit,
+                                         rebinFactor);
   } else {
-    FitLongitudinalTargetChannelHistograms(f, inputDirName, outputDirName,
-                                           minEntriesToFit, rebinFactor);
+    FitLongitudinalTargetChannelHistograms(f,
+                                           inputDirName,
+                                           outputDirName,
+                                           minEntriesToFit,
+                                           rebinFactor);
   }
 
   f->Write("", TObject::kOverwrite);
@@ -388,17 +466,25 @@ void FitMergedTargetHistograms(
 }
 
 void FitMergedTargetHistogramsTransverse(const char *mergedFileName,
-                                         int minEntriesToFit = 50,
-                                         int rebinFactor = 2) {
-  FitMergedTargetHistograms(mergedFileName, true, "target_channels",
-                            "fitted_target_channels_trans", minEntriesToFit,
+                                         int  minEntriesToFit = 50,
+                                         int  rebinFactor     = 2)
+{
+  FitMergedTargetHistograms(mergedFileName,
+                            true,
+                            "target_channels",
+                            "fitted_target_channels_trans",
+                            minEntriesToFit,
                             rebinFactor);
 }
 
 void FitMergedTargetHistogramsLongitudinal(const char *mergedFileName,
-                                           int minEntriesToFit = 50,
-                                           int rebinFactor = 2) {
-  FitMergedTargetHistograms(mergedFileName, false, "target_channels",
-                            "fitted_target_channels_long", minEntriesToFit,
+                                           int  minEntriesToFit = 50,
+                                           int  rebinFactor     = 2)
+{
+  FitMergedTargetHistograms(mergedFileName,
+                            false,
+                            "target_channels",
+                            "fitted_target_channels_long",
+                            minEntriesToFit,
                             rebinFactor);
 }
