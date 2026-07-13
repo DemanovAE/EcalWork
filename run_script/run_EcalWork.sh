@@ -68,7 +68,7 @@ MAXDIFF5X5=0.25
 TRANS_AMP1=300
 TRANS_AMP2=500
 TRANS_MINLEN=5
-TRANS_CONTAM=0.50   # reserved, not used for now
+TRANS_CONTAM=0.20   # reserved, not used for now
 
 # --- Logging -----------------------------------------------------------------
 
